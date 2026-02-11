@@ -45,7 +45,7 @@ development_status:
   1-1-project-initialization-and-structure: done
   1-2-markdown-block-parser: done
   1-3-glamour-block-rendering-and-cache: done
-  1-4-document-viewport-with-centered-writing-column: backlog
+  1-4-document-viewport-with-centered-writing-column: done
   1-5-open-and-display-existing-markdown-file: backlog
   1-6-normal-mode-vim-navigation: backlog
   epic-1-retrospective: optional
