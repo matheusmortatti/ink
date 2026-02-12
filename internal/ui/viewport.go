@@ -105,6 +105,20 @@ func (v *Viewport) ViewportHeight() int {
 	return v.layout.TerminalHeight
 }
 
+// Line returns a specific content line by index. Returns empty string for out-of-range.
+func (v *Viewport) Line(n int) string {
+	if n < 0 || n >= v.totalLines {
+		return ""
+	}
+	return v.lines[n]
+}
+
+// SetScrollOffset sets the scroll position directly (clamped to valid bounds).
+func (v *Viewport) SetScrollOffset(offset int) {
+	v.scrollOffset = offset
+	v.clampScroll()
+}
+
 // composeBlocks renders each block, pads and centers lines, and joins with blank separators.
 func (v *Viewport) composeBlocks() error {
 	if len(v.blocks) == 0 {

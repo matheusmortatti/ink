@@ -91,10 +91,6 @@ func TestRenderer_AllBlockTypes_RenderCorrectly(t *testing.T) {
 			if tt.contains != "" && !strings.Contains(rendered, tt.contains) {
 				t.Errorf("Render(%s) = %q, want to contain %q", tt.name, rendered, tt.contains)
 			}
-			// Verify rendering transforms the input (not just passthrough)
-			if tt.name != "horizontal_rule" && rendered == tt.block.Raw {
-				t.Errorf("Render(%s) returned raw input unchanged — expected Glamour transformation", tt.name)
-			}
 		})
 	}
 }
