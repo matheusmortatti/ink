@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/matheusmortatti/ink/internal/block"
 	"github.com/matheusmortatti/ink/internal/render"
 	"github.com/matheusmortatti/ink/internal/ui"
@@ -28,6 +29,9 @@ type EditorModel struct {
 	// Insert mode state
 	activeBlockIdx int              // index of block being edited, -1 when none
 	activeBuffer   *block.GapBuffer // gap buffer for active editing block
+
+	// Syntax dimming
+	dimStyle lipgloss.Style
 }
 
 // NewEditor creates an EditorModel with the given file path and parsed blocks.
@@ -596,7 +600,10 @@ func (e *EditorModel) initViewport() {
 
 	_ = r.PreRenderAll(e.blocks, e.cache)
 
+	e.dimStyle = render.DimStyle(render.SyntaxDimPercent)
+
 	e.viewport = ui.NewViewport(e.width, e.height)
+	e.viewport.SetDimFunc(func(s string) string { return e.dimStyle.Render(s) })
 	_ = e.viewport.SetContent(e.blocks, e.renderer, e.cache)
 
 	e.ready = true

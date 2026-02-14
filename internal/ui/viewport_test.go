@@ -480,6 +480,110 @@ func TestViewport_UpdateActiveBlockContent(t *testing.T) {
 	}
 }
 
+func TestWrapLine_PlainText_NoWrapNeeded(t *testing.T) {
+	result := wrapLine("hello", 10)
+	if len(result) != 1 || result[0] != "hello" {
+		t.Errorf("wrapLine short text = %v, want [hello]", result)
+	}
+}
+
+func TestWrapLine_PlainText_Wraps(t *testing.T) {
+	result := wrapLine("abcdefghij", 5)
+	if len(result) != 2 {
+		t.Fatalf("wrapLine expected 2 lines, got %d", len(result))
+	}
+	if result[0] != "abcde" || result[1] != "fghij" {
+		t.Errorf("wrapLine = %v, want [abcde, fghij]", result)
+	}
+}
+
+func TestWrapLine_ANSI_PreservesEscapes(t *testing.T) {
+	// A line with ANSI: "AB" where A is styled, B is not
+	// \x1b[2mA\x1b[0mBCDE — 5 visible chars in a width-3 wrap
+	line := "\x1b[2mA\x1b[0mBCDE"
+	result := wrapLine(line, 3)
+
+	// Should have 2 lines: first with 3 visible chars, second with 2
+	if len(result) != 2 {
+		t.Fatalf("ANSI wrapLine expected 2 lines, got %d: %v", len(result), result)
+	}
+
+	// First line should contain the ANSI codes and 3 visible chars
+	if !strings.Contains(result[0], "\x1b[2m") {
+		t.Error("First wrapped line should contain ANSI escape")
+	}
+}
+
+func TestWrapLine_ANSI_CountsOnlyVisible(t *testing.T) {
+	// 3 visible chars "ABC" with ANSI around each — should not wrap at width 5
+	line := "\x1b[2mA\x1b[0m\x1b[2mB\x1b[0m\x1b[2mC\x1b[0m"
+	result := wrapLine(line, 5)
+	if len(result) != 1 {
+		t.Errorf("ANSI line with 3 visible chars should not wrap at width 5, got %d lines", len(result))
+	}
+}
+
+func TestWrapLine_ANSI_EmptyLine(t *testing.T) {
+	result := wrapLine("", 10)
+	if len(result) != 1 || result[0] != "" {
+		t.Errorf("wrapLine empty = %v, want [\"\"]", result)
+	}
+}
+
+func TestViewport_SetDimFunc_AppliesDimming(t *testing.T) {
+	r, err := render.NewRenderer(80)
+	if err != nil {
+		t.Fatalf("NewRenderer: %v", err)
+	}
+	cache := render.NewRenderCache()
+
+	blocks := []block.Block{
+		{Type: block.Heading, Raw: "# Hello"},
+		{Type: block.Paragraph, Raw: "World"},
+	}
+
+	vp := NewViewport(120, 40)
+	vp.SetDimFunc(func(s string) string {
+		return "\u00ab" + s + "\u00bb"
+	})
+	if err := vp.SetContent(blocks, r, cache); err != nil {
+		t.Fatalf("SetContent: %v", err)
+	}
+
+	if err := vp.SetActiveBlock(0, "# Hello"); err != nil {
+		t.Fatalf("SetActiveBlock: %v", err)
+	}
+
+	view := vp.View()
+	// The heading marker should be dimmed with our markers
+	if !strings.Contains(view, "\u00ab# \u00bb") {
+		t.Errorf("Active block should have dimmed heading marker, got:\n%s", view)
+	}
+	if !strings.Contains(view, "Hello") {
+		t.Errorf("Content text 'Hello' should be present, got:\n%s", view)
+	}
+}
+
+func TestWrapLine_ANSI_CarriesStateAcrossWrap(t *testing.T) {
+	// A styled region spanning a wrap: 5 visible chars all styled, width 3
+	line := "\x1b[2mABCDE\x1b[0m"
+	result := wrapLine(line, 3)
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 lines, got %d: %v", len(result), result)
+	}
+
+	// Second line should have ANSI styling carried over
+	if !strings.Contains(result[1], "\x1b[2m") {
+		t.Errorf("Second wrapped line should carry ANSI state, got %q", result[1])
+	}
+
+	// First line should end with a reset
+	if !strings.Contains(result[0], "\x1b[0m") {
+		t.Errorf("First wrapped line should end with ANSI reset, got %q", result[0])
+	}
+}
+
 func TestViewport_ViewOnlyVisibleLines(t *testing.T) {
 	vp := NewViewport(120, 3) // only 3 lines visible
 	vp.lines = []string{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J"}

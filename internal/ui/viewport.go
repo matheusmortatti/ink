@@ -1,11 +1,15 @@
 package ui
 
 import (
+	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matheusmortatti/ink/internal/block"
 	"github.com/matheusmortatti/ink/internal/render"
 )
+
+var ansiEscRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 // blockRange tracks the line range of a block within the composed output.
 type blockRange struct {
@@ -23,9 +27,9 @@ type Viewport struct {
 	renderer     *render.Renderer
 	cache        *render.RenderCache
 	blockRanges  []blockRange // line ranges for each block
-	activeBlock      int    // index of active editing block, -1 when none
-	activeRawContent string // raw content of the active block
-
+	activeBlock      int                    // index of active editing block, -1 when none
+	activeRawContent string                 // raw content of the active block
+	dimFunc          func(string) string    // function for dimming syntax characters
 }
 
 // NewViewport creates a viewport with the given terminal dimensions.
@@ -34,6 +38,11 @@ func NewViewport(width, height int) *Viewport {
 		layout:      NewLayout(width, height),
 		activeBlock: -1,
 	}
+}
+
+// SetDimFunc sets the function used for dimming syntax characters in the active block.
+func (v *Viewport) SetDimFunc(dimFunc func(string) string) {
+	v.dimFunc = dimFunc
 }
 
 // SetContent renders blocks and composes them into the viewport.
@@ -148,7 +157,11 @@ func (v *Viewport) composeBlocks() error {
 
 		// Use raw content if this is the active editing block
 		if i == v.activeBlock {
-			rawLines := strings.Split(v.activeRawContent, "\n")
+			displayContent := v.activeRawContent
+			if v.dimFunc != nil {
+				displayContent = render.DimSyntax(displayContent, b.Type, v.dimFunc)
+			}
+			rawLines := strings.Split(displayContent, "\n")
 			for _, line := range rawLines {
 				wrapped := wrapLine(line, v.layout.ColumnWidth)
 				for _, wl := range wrapped {
@@ -202,8 +215,13 @@ func (v *Viewport) UpdateActiveBlockContent(rawContent string) {
 	}
 	v.activeRawContent = rawContent
 
+	displayContent := rawContent
+	if v.dimFunc != nil && v.activeBlock >= 0 && v.activeBlock < len(v.blocks) {
+		displayContent = render.DimSyntax(displayContent, v.blocks[v.activeBlock].Type, v.dimFunc)
+	}
+
 	margin := strings.Repeat(" ", v.layout.LeftMargin)
-	newRawLines := strings.Split(rawContent, "\n")
+	newRawLines := strings.Split(displayContent, "\n")
 
 	var newBlockLines []string
 	for _, line := range newRawLines {
@@ -276,19 +294,88 @@ func (v *Viewport) BufferToScreenPos(bufLine, bufCol int) (screenRow, screenCol 
 	return screenRow, screenCol
 }
 
-// wrapLine splits a line into multiple lines at width characters.
-// Returns the original line in a slice if it fits within width.
+// wrapLine splits a line into multiple lines at width visible characters.
+// ANSI escape sequences are not counted as visible characters but are preserved
+// in the output. Returns the original line in a slice if it fits within width.
 func wrapLine(line string, width int) []string {
-	runes := []rune(line)
-	if width <= 0 || len(runes) <= width {
+	if width <= 0 {
 		return []string{line}
 	}
-	var result []string
-	for len(runes) > width {
-		result = append(result, string(runes[:width]))
-		runes = runes[width:]
+
+	// Fast path: if no ANSI codes present, use simple rune-based wrapping
+	if !strings.Contains(line, "\x1b[") {
+		runes := []rune(line)
+		if len(runes) <= width {
+			return []string{line}
+		}
+		var result []string
+		for len(runes) > width {
+			result = append(result, string(runes[:width]))
+			runes = runes[width:]
+		}
+		result = append(result, string(runes))
+		return result
 	}
-	result = append(result, string(runes))
+
+	// ANSI-aware wrapping: count only visible characters for width
+	return wrapLineANSI(line, width)
+}
+
+// wrapLineANSI wraps a line containing ANSI escape sequences at width visible characters.
+// Tracks active ANSI styling state and carries it across wrap boundaries so that
+// styled regions that span a wrap point continue on the next line.
+func wrapLineANSI(line string, width int) []string {
+	matches := ansiEscRe.FindAllStringIndex(line, -1)
+	ansiSet := make(map[int]int) // start byte -> end byte for ANSI sequences
+	for _, m := range matches {
+		ansiSet[m[0]] = m[1]
+	}
+
+	var result []string
+	var current strings.Builder
+	var activeANSI string // tracks current ANSI styling state
+	visibleCount := 0
+	i := 0
+	bytes := []byte(line)
+
+	for i < len(bytes) {
+		// Check if this position starts an ANSI escape sequence
+		if end, ok := ansiSet[i]; ok {
+			seq := string(bytes[i:end])
+			current.WriteString(seq)
+			// Track ANSI state: reset clears, anything else sets
+			if seq == "\x1b[0m" || seq == "\x1b[m" {
+				activeANSI = ""
+			} else {
+				activeANSI = seq
+			}
+			i = end
+			continue
+		}
+
+		// Regular visible character (may be multi-byte UTF-8)
+		if visibleCount >= width {
+			// Close styling on current line if active
+			if activeANSI != "" {
+				current.WriteString("\x1b[0m")
+			}
+			result = append(result, current.String())
+			current.Reset()
+			// Restore styling on new line
+			if activeANSI != "" {
+				current.WriteString(activeANSI)
+			}
+			visibleCount = 0
+		}
+
+		// Read one UTF-8 character
+		_, size := utf8.DecodeRune(bytes[i:])
+		current.Write(bytes[i : i+size])
+		visibleCount++
+		i += size
+	}
+
+	result = append(result, current.String())
 	return result
 }
 
