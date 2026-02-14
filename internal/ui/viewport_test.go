@@ -393,6 +393,93 @@ func TestViewport_ScrollDown_ContentShorterThanViewport(t *testing.T) {
 	}
 }
 
+func TestViewport_SetActiveBlock_DisplaysRaw(t *testing.T) {
+	r, err := render.NewRenderer(80)
+	if err != nil {
+		t.Fatalf("NewRenderer: %v", err)
+	}
+	cache := render.NewRenderCache()
+
+	blocks := []block.Block{
+		{Type: block.Paragraph, Raw: "# Hello"},
+		{Type: block.Paragraph, Raw: "World"},
+	}
+
+	vp := NewViewport(120, 40)
+	if err := vp.SetContent(blocks, r, cache); err != nil {
+		t.Fatalf("SetContent: %v", err)
+	}
+
+	// Activate block 0 — should show raw markdown instead of rendered
+	if err := vp.SetActiveBlock(0, "# Hello"); err != nil {
+		t.Fatalf("SetActiveBlock: %v", err)
+	}
+
+	view := vp.View()
+	if !strings.Contains(view, "# Hello") {
+		t.Errorf("Active block should display raw markdown '# Hello', got:\n%s", view)
+	}
+}
+
+func TestViewport_ClearActiveBlock_RestoresRendered(t *testing.T) {
+	r, err := render.NewRenderer(80)
+	if err != nil {
+		t.Fatalf("NewRenderer: %v", err)
+	}
+	cache := render.NewRenderCache()
+
+	blocks := []block.Block{
+		{Type: block.Paragraph, Raw: "Test paragraph"},
+	}
+
+	vp := NewViewport(120, 40)
+	if err := vp.SetContent(blocks, r, cache); err != nil {
+		t.Fatalf("SetContent: %v", err)
+	}
+
+	viewBefore := vp.View()
+
+	// Activate then clear
+	if err := vp.SetActiveBlock(0, "Test paragraph"); err != nil {
+		t.Fatalf("SetActiveBlock: %v", err)
+	}
+	if err := vp.ClearActiveBlock(); err != nil {
+		t.Fatalf("ClearActiveBlock: %v", err)
+	}
+
+	viewAfter := vp.View()
+	if viewBefore != viewAfter {
+		t.Errorf("View after ClearActiveBlock should match original.\nBefore: %q\nAfter: %q", viewBefore, viewAfter)
+	}
+}
+
+func TestViewport_UpdateActiveBlockContent(t *testing.T) {
+	r, err := render.NewRenderer(80)
+	if err != nil {
+		t.Fatalf("NewRenderer: %v", err)
+	}
+	cache := render.NewRenderCache()
+
+	blocks := []block.Block{
+		{Type: block.Paragraph, Raw: "Hello"},
+	}
+
+	vp := NewViewport(120, 40)
+	if err := vp.SetContent(blocks, r, cache); err != nil {
+		t.Fatalf("SetContent: %v", err)
+	}
+
+	if err := vp.SetActiveBlock(0, "Hello"); err != nil {
+		t.Fatalf("SetActiveBlock: %v", err)
+	}
+	vp.UpdateActiveBlockContent("Hello World")
+
+	view := vp.View()
+	if !strings.Contains(view, "Hello World") {
+		t.Errorf("Updated active block should show 'Hello World', got:\n%s", view)
+	}
+}
+
 func TestViewport_ViewOnlyVisibleLines(t *testing.T) {
 	vp := NewViewport(120, 3) // only 3 lines visible
 	vp.lines = []string{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J"}

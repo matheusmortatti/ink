@@ -53,7 +53,7 @@ development_status:
   # Epic 2: Write with Live Preview
   epic-2: in-progress
   2-1-gap-buffer-for-block-text-editing: done
-  2-2-insert-mode-and-text-input: backlog
+  2-2-insert-mode-and-text-input: done
   2-3-syntax-dimming-for-active-editing-block: backlog
   2-4-block-transitions-the-mode-unified-block-reveal: backlog
   2-5-cursor-position-mapping-between-rendered-and-raw: backlog

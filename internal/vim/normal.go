@@ -53,6 +53,14 @@ func (n *NormalHandler) handleSingleKey(key string) Action {
 		return ScrollAction{Direction: 1, MoveCursor: true}
 	case "ctrl+u":
 		return ScrollAction{Direction: -1, MoveCursor: true}
+	case "i":
+		return ChangeModeAction{Mode: Insert, Variant: "i"}
+	case "a":
+		return ChangeModeAction{Mode: Insert, Variant: "a"}
+	case "o":
+		return ChangeModeAction{Mode: Insert, Variant: "o"}
+	case "O", "shift+O":
+		return ChangeModeAction{Mode: Insert, Variant: "O"}
 	case "ctrl+c":
 		return QuitAction{}
 	default:

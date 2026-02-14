@@ -35,9 +35,38 @@ type WordMotionAction struct {
 // QuitAction signals the editor to exit.
 type QuitAction struct{}
 
+// ChangeModeAction switches the editor to a different vim mode.
+type ChangeModeAction struct {
+	Mode    Mode   // Target mode
+	Variant string // Entry variant: "i", "a", "o", "O" (for insert mode entry)
+}
+
+// InsertCharAction inserts a character at the cursor position.
+type InsertCharAction struct {
+	Char rune
+}
+
+// BackspaceAction deletes the character before the cursor.
+type BackspaceAction struct{}
+
+// DeleteCharAction deletes the character after the cursor.
+type DeleteCharAction struct{}
+
+// InsertNewlineAction inserts a newline at the cursor position.
+type InsertNewlineAction struct{}
+
+// InsertTabAction inserts a tab/indentation at the cursor position.
+type InsertTabAction struct{}
+
 func (NoOpAction) actionTag()             {}
 func (MoveCursorAction) actionTag()       {}
 func (ScrollAction) actionTag()           {}
 func (DocumentPositionAction) actionTag() {}
 func (WordMotionAction) actionTag()       {}
 func (QuitAction) actionTag()             {}
+func (ChangeModeAction) actionTag()       {}
+func (InsertCharAction) actionTag()       {}
+func (BackspaceAction) actionTag()        {}
+func (DeleteCharAction) actionTag()       {}
+func (InsertNewlineAction) actionTag()    {}
+func (InsertTabAction) actionTag()        {}

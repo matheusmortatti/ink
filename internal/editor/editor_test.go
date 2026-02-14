@@ -663,3 +663,257 @@ func TestEditorModel_EmptyDocument_NoNavigationCrash(t *testing.T) {
 	e.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
 	e.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 }
+
+func TestEditorModel_InsertMode_EnterAndExit(t *testing.T) {
+	blocks := block.Parse([]byte("Hello world"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	if e.CurrentMode() != vim.Normal {
+		t.Fatalf("expected Normal mode, got %v", e.CurrentMode())
+	}
+
+	// Press i to enter insert mode
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+
+	if e.CurrentMode() != vim.Insert {
+		t.Fatalf("expected Insert mode after i, got %v", e.CurrentMode())
+	}
+	if e.activeBlockIdx < 0 {
+		t.Fatal("expected activeBlockIdx >= 0 in insert mode")
+	}
+	if e.activeBuffer == nil {
+		t.Fatal("expected activeBuffer != nil in insert mode")
+	}
+
+	// Press Esc to exit
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	if e.CurrentMode() != vim.Normal {
+		t.Errorf("expected Normal mode after Esc, got %v", e.CurrentMode())
+	}
+	if e.activeBlockIdx != -1 {
+		t.Errorf("expected activeBlockIdx=-1 after Esc, got %d", e.activeBlockIdx)
+	}
+	if e.activeBuffer != nil {
+		t.Error("expected activeBuffer=nil after Esc")
+	}
+}
+
+func TestEditorModel_InsertMode_TypeText_UpdatesBlock(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+
+	// Type "World"
+	for _, ch := range "World" {
+		e.Update(tea.KeyPressMsg{Code: ch})
+	}
+
+	// Exit insert mode
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	// Block content should be updated — 'i' places cursor at start
+	if e.blocks[0].Raw != "WorldHello" {
+		t.Errorf("expected block raw='WorldHello', got %q", e.blocks[0].Raw)
+	}
+}
+
+func TestEditorModel_InsertMode_TypeSpace(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode at end (use 'a' which positions after first char)
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+
+	// Type space using the "space" key representation
+	e.Update(tea.KeyPressMsg{Code: ' '})
+
+	// Exit
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	if e.blocks[0].Raw != " Hello" {
+		t.Errorf("expected block raw=' Hello', got %q", e.blocks[0].Raw)
+	}
+}
+
+func TestEditorModel_InsertMode_Backspace(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode with 'a' (after cursor)
+	e.Update(tea.KeyPressMsg{Code: 'a'})
+
+	// Type a character then backspace it
+	e.Update(tea.KeyPressMsg{Code: 'X'})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+
+	// Exit
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	// Block should be unchanged since we typed then deleted
+	if e.blocks[0].Raw != "Hello" {
+		t.Errorf("expected block raw='Hello' after type+backspace, got %q", e.blocks[0].Raw)
+	}
+}
+
+func TestEditorModel_InsertMode_NewlineO(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Press o to create new line below
+	e.Update(tea.KeyPressMsg{Code: 'o'})
+
+	// Type on the new line
+	for _, ch := range "World" {
+		e.Update(tea.KeyPressMsg{Code: ch})
+	}
+
+	// Exit
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	expected := "Hello\nWorld"
+	if e.blocks[0].Raw != expected {
+		t.Errorf("expected block raw=%q after o+type, got %q", expected, e.blocks[0].Raw)
+	}
+}
+
+func TestEditorModel_InsertMode_NewlineO_MultiLine(t *testing.T) {
+	blocks := block.Parse([]byte("Line1\nLine2\nLine3"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Press o to create new line below cursor line (line 0 with simplified mapping)
+	e.Update(tea.KeyPressMsg{Code: 'o'})
+
+	// Type on the new line
+	for _, ch := range "New" {
+		e.Update(tea.KeyPressMsg{Code: ch})
+	}
+
+	// Exit
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	expected := "Line1\nNew\nLine2\nLine3"
+	if e.blocks[0].Raw != expected {
+		t.Errorf("expected block raw=%q after o on multi-line, got %q", expected, e.blocks[0].Raw)
+	}
+}
+
+func TestEditorModel_InsertMode_Delete(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode at beginning
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+
+	// Delete key removes character after cursor
+	e.Update(tea.KeyPressMsg{Code: tea.KeyDelete})
+
+	// Exit
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	expected := "ello"
+	if e.blocks[0].Raw != expected {
+		t.Errorf("expected block raw=%q after delete, got %q", expected, e.blocks[0].Raw)
+	}
+}
+
+func TestEditorModel_InsertMode_NewlineShiftO(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Press O to create new line above
+	e.Update(tea.KeyPressMsg{Code: 'O', Mod: tea.ModShift})
+
+	// Type on the new line
+	for _, ch := range "World" {
+		e.Update(tea.KeyPressMsg{Code: ch})
+	}
+
+	// Exit
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	expected := "World\nHello"
+	if e.blocks[0].Raw != expected {
+		t.Errorf("expected block raw=%q after O+type, got %q", expected, e.blocks[0].Raw)
+	}
+}
+
+func TestEditorModel_InsertMode_Tab(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+
+	// Type tab
+	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+
+	// Exit
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	expected := "\tHello"
+	if e.blocks[0].Raw != expected {
+		t.Errorf("expected block raw=%q after tab, got %q", expected, e.blocks[0].Raw)
+	}
+}
+
+func TestEditorModel_InsertMode_CursorShape(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Normal mode: cursor should be block
+	v := e.View()
+	if v.Cursor.Shape != tea.CursorBlock {
+		t.Errorf("expected CursorBlock in normal mode, got %v", v.Cursor.Shape)
+	}
+
+	// Enter insert mode
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+
+	v = e.View()
+	if v.Cursor.Shape != tea.CursorBar {
+		t.Errorf("expected CursorBar in insert mode, got %v", v.Cursor.Shape)
+	}
+
+	// Exit
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	v = e.View()
+	if v.Cursor.Shape != tea.CursorBlock {
+		t.Errorf("expected CursorBlock after Esc, got %v", v.Cursor.Shape)
+	}
+}
+
+func TestEditorModel_InsertMode_ArrowKeys(t *testing.T) {
+	blocks := block.Parse([]byte("Hello\nWorld"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+
+	// Move right, then type — should insert after moved position
+	e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	e.Update(tea.KeyPressMsg{Code: 'X'})
+
+	// Exit
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	expected := "HeXllo\nWorld"
+	if e.blocks[0].Raw != expected {
+		t.Errorf("expected %q after arrow+type, got %q", expected, e.blocks[0].Raw)
+	}
+}

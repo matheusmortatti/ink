@@ -1,6 +1,8 @@
 package editor
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/matheusmortatti/ink/internal/block"
 	"github.com/matheusmortatti/ink/internal/render"
@@ -22,14 +24,19 @@ type EditorModel struct {
 	cursorLine  int
 	cursorCol   int
 	desiredCol  int
+
+	// Insert mode state
+	activeBlockIdx int              // index of block being edited, -1 when none
+	activeBuffer   *block.GapBuffer // gap buffer for active editing block
 }
 
 // NewEditor creates an EditorModel with the given file path and parsed blocks.
 func NewEditor(filePath string, blocks []block.Block) *EditorModel {
 	return &EditorModel{
-		filePath:    filePath,
-		blocks:      blocks,
-		modeHandler: vim.NewNormalHandler(),
+		filePath:       filePath,
+		blocks:         blocks,
+		modeHandler:    vim.NewNormalHandler(),
+		activeBlockIdx: -1,
 	}
 }
 
@@ -88,11 +95,22 @@ func (e *EditorModel) View() tea.View {
 	v := tea.NewView(e.viewport.View())
 	v.AltScreen = true
 
-	screenRow := e.cursorLine - e.viewport.ScrollOffset()
-	screenCol := e.leftMargin() + e.cursorCol
+	if e.activeBlockIdx >= 0 && e.activeBuffer != nil {
+		// Insert mode: cursor is within the active block (accounts for line wrapping)
+		bufLine, bufCol := e.activeBuffer.CursorLineCol()
+		screenRow, screenCol := e.viewport.BufferToScreenPos(bufLine, bufCol)
+		screenRow -= e.viewport.ScrollOffset()
 
-	v.Cursor = tea.NewCursor(screenCol, screenRow)
-	v.Cursor.Shape = tea.CursorBlock
+		v.Cursor = tea.NewCursor(screenCol, screenRow)
+		v.Cursor.Shape = tea.CursorBar
+	} else {
+		// Normal mode: cursor is at document level
+		screenRow := e.cursorLine - e.viewport.ScrollOffset()
+		screenCol := e.leftMargin() + e.cursorCol
+
+		v.Cursor = tea.NewCursor(screenCol, screenRow)
+		v.Cursor.Shape = tea.CursorBlock
+	}
 
 	return v
 }
@@ -102,27 +120,81 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 	case vim.QuitAction:
 		return e, tea.Quit
 
+	case vim.ChangeModeAction:
+		if a.Mode == vim.Insert && e.modeHandler.Mode() == vim.Normal {
+			e.enterInsertMode(a.Variant)
+		} else if a.Mode == vim.Normal && e.modeHandler.Mode() == vim.Insert {
+			e.exitInsertMode()
+		}
+
+	case vim.InsertCharAction:
+		if e.activeBuffer != nil {
+			e.activeBuffer.Insert(a.Char)
+			e.updateActiveBlockDisplay()
+		}
+
+	case vim.BackspaceAction:
+		if e.activeBuffer != nil {
+			e.activeBuffer.Backspace()
+			e.updateActiveBlockDisplay()
+		}
+
+	case vim.DeleteCharAction:
+		if e.activeBuffer != nil {
+			e.activeBuffer.Delete()
+			e.updateActiveBlockDisplay()
+		}
+
+	case vim.InsertNewlineAction:
+		if e.activeBuffer != nil {
+			e.activeBuffer.Insert('\n')
+			e.updateActiveBlockDisplay()
+		}
+
+	case vim.InsertTabAction:
+		if e.activeBuffer != nil {
+			e.activeBuffer.Insert('\t')
+			e.updateActiveBlockDisplay()
+		}
+
 	case vim.MoveCursorAction:
-		if a.Relative {
-			if a.Line != 0 {
-				e.cursorLine += a.Line
-				e.clampCursorLine()
-				// Restore desired column (sticky column for j/k)
-				e.cursorCol = e.desiredCol
-				e.clampCursorCol()
+		if e.activeBlockIdx >= 0 && e.activeBuffer != nil {
+			// In insert mode: move within the gap buffer (wrap-aware for up/down)
+			if a.Relative {
+				if a.Col < 0 {
+					e.activeBuffer.MoveLeft()
+				} else if a.Col > 0 {
+					e.activeBuffer.MoveRight()
+				}
+				if a.Line < 0 {
+					e.moveInsertCursorUp()
+				} else if a.Line > 0 {
+					e.moveInsertCursorDown()
+				}
 			}
-			if a.Col != 0 {
-				e.cursorCol += a.Col
-				e.clampCursorCol()
+			e.ensureInsertCursorVisible()
+		} else {
+			// Normal mode cursor movement
+			if a.Relative {
+				if a.Line != 0 {
+					e.cursorLine += a.Line
+					e.clampCursorLine()
+					e.cursorCol = e.desiredCol
+					e.clampCursorCol()
+				}
+				if a.Col != 0 {
+					e.cursorCol += a.Col
+					e.clampCursorCol()
+					e.desiredCol = e.cursorCol
+				}
+			} else {
+				e.cursorLine = a.Line
+				e.cursorCol = a.Col
+				e.clampCursor()
 				e.desiredCol = e.cursorCol
 			}
-		} else {
-			e.cursorLine = a.Line
-			e.cursorCol = a.Col
-			e.clampCursor()
-			e.desiredCol = e.cursorCol
+			e.ensureCursorVisible()
 		}
-		e.ensureCursorVisible()
 
 	case vim.WordMotionAction:
 		e.applyWordMotion(a.Forward)
@@ -165,6 +237,186 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 	}
 
 	return e, nil
+}
+
+// blockIndexForLine maps a document cursor line to the block index it falls within.
+func (e *EditorModel) blockIndexForLine(docLine int) int {
+	if e.viewport == nil || len(e.blocks) == 0 {
+		return 0
+	}
+	for i := range e.blocks {
+		start := e.viewport.BlockStartLine(i)
+		if start < 0 {
+			continue
+		}
+		// Check if next block's start is beyond docLine
+		if i+1 < len(e.blocks) {
+			nextStart := e.viewport.BlockStartLine(i + 1)
+			if nextStart > 0 && docLine < nextStart {
+				return i
+			}
+		} else {
+			// Last block
+			return i
+		}
+	}
+	return len(e.blocks) - 1
+}
+
+// enterInsertMode activates insert mode on the block at the cursor position.
+func (e *EditorModel) enterInsertMode(variant string) {
+	blockIdx := e.blockIndexForLine(e.cursorLine)
+	if blockIdx < 0 || blockIdx >= len(e.blocks) {
+		return
+	}
+
+	e.activeBlockIdx = blockIdx
+	e.activeBuffer = block.NewGapBuffer(e.blocks[blockIdx].Raw)
+
+	// Position cursor in gap buffer based on variant
+	switch variant {
+	case "i":
+		// Place at beginning of block (simplified mapping per Dev Notes)
+		e.activeBuffer.SetCursorLineCol(0, 0)
+	case "a":
+		// Place after first character (MoveRight safely handles empty blocks)
+		e.activeBuffer.SetCursorLineCol(0, 0)
+		e.activeBuffer.MoveRight()
+	case "o":
+		// New line below current line (position to line 0 first — gap buffer starts at end)
+		e.activeBuffer.SetCursorLineCol(0, 0)
+		e.activeBuffer.MoveToLineEnd()
+		e.activeBuffer.Insert('\n')
+	case "O":
+		// New line above current line
+		e.activeBuffer.SetCursorLineCol(0, 0)
+		e.activeBuffer.MoveToLineStart()
+		e.activeBuffer.Insert('\n')
+		e.activeBuffer.SetCursorLineCol(0, 0)
+	}
+
+	if err := e.viewport.SetActiveBlock(blockIdx, e.activeBuffer.Content()); err != nil {
+		e.activeBlockIdx = -1
+		e.activeBuffer = nil
+		return
+	}
+	e.modeHandler = vim.NewInsertHandler()
+	e.ensureInsertCursorVisible()
+}
+
+// exitInsertMode commits changes and returns to normal mode.
+func (e *EditorModel) exitInsertMode() {
+	if e.activeBlockIdx < 0 || e.activeBuffer == nil {
+		return
+	}
+
+	// Commit gap buffer content back to block
+	e.blocks[e.activeBlockIdx].Raw = e.activeBuffer.Content()
+
+	// Invalidate and re-render the modified block
+	e.cache.InvalidateBlock(e.blocks[e.activeBlockIdx])
+
+	// Recompose viewport to fully rendered state
+	_ = e.viewport.ClearActiveBlock()
+
+	// Place document cursor at the start of the block (simplified mapping)
+	blockStart := e.viewport.BlockStartLine(e.activeBlockIdx)
+	if blockStart >= 0 {
+		e.cursorLine = blockStart
+	}
+	e.cursorCol = 0
+	e.desiredCol = 0
+
+	e.activeBlockIdx = -1
+	e.activeBuffer = nil
+	e.modeHandler = vim.NewNormalHandler()
+	e.clampCursor()
+	e.ensureCursorVisible()
+}
+
+// updateActiveBlockDisplay updates the viewport with the current gap buffer content.
+func (e *EditorModel) updateActiveBlockDisplay() {
+	if e.activeBuffer == nil || e.viewport == nil {
+		return
+	}
+	e.viewport.UpdateActiveBlockContent(e.activeBuffer.Content())
+	e.ensureInsertCursorVisible()
+}
+
+// ensureInsertCursorVisible ensures the insert mode cursor is visible in the viewport.
+func (e *EditorModel) ensureInsertCursorVisible() {
+	if e.viewport == nil || e.activeBuffer == nil || e.activeBlockIdx < 0 {
+		return
+	}
+	bufLine, bufCol := e.activeBuffer.CursorLineCol()
+	absLine, _ := e.viewport.BufferToScreenPos(bufLine, bufCol)
+
+	offset := e.viewport.ScrollOffset()
+	vpHeight := e.viewport.ViewportHeight()
+
+	if absLine < offset {
+		e.viewport.SetScrollOffset(absLine)
+	}
+	if absLine >= offset+vpHeight {
+		e.viewport.SetScrollOffset(absLine - vpHeight + 1)
+	}
+}
+
+// moveInsertCursorDown moves the insert mode cursor down one visual row,
+// accounting for line wrapping at column width.
+func (e *EditorModel) moveInsertCursorDown() {
+	colWidth := ui.CalculateColumnWidth(e.width)
+	if colWidth <= 0 {
+		e.activeBuffer.MoveDown()
+		return
+	}
+
+	bufLine, bufCol := e.activeBuffer.CursorLineCol()
+	rawLines := strings.Split(e.activeBuffer.Content(), "\n")
+	if bufLine >= len(rawLines) {
+		return
+	}
+
+	currentLineLen := len([]rune(rawLines[bufLine]))
+	visualCol := bufCol % colWidth
+
+	// Check if there's a next visual row on the same actual line
+	nextVisualRowStart := ((bufCol / colWidth) + 1) * colWidth
+	if nextVisualRowStart < currentLineLen {
+		// Move to next visual row on same line
+		e.activeBuffer.SetCursorLineCol(bufLine, nextVisualRowStart+visualCol)
+	} else if bufLine+1 < len(rawLines) {
+		// Move to next actual line, first visual row
+		e.activeBuffer.SetCursorLineCol(bufLine+1, visualCol)
+	}
+}
+
+// moveInsertCursorUp moves the insert mode cursor up one visual row,
+// accounting for line wrapping at column width.
+func (e *EditorModel) moveInsertCursorUp() {
+	colWidth := ui.CalculateColumnWidth(e.width)
+	if colWidth <= 0 {
+		e.activeBuffer.MoveUp()
+		return
+	}
+
+	bufLine, bufCol := e.activeBuffer.CursorLineCol()
+	rawLines := strings.Split(e.activeBuffer.Content(), "\n")
+	visualCol := bufCol % colWidth
+	currentVisualRow := bufCol / colWidth
+
+	if currentVisualRow > 0 {
+		// Move to previous visual row on same line
+		e.activeBuffer.SetCursorLineCol(bufLine, (currentVisualRow-1)*colWidth+visualCol)
+	} else if bufLine > 0 {
+		// Move to previous actual line, last visual row
+		prevLineLen := len([]rune(rawLines[bufLine-1]))
+		lastVisualRowStart := 0
+		if prevLineLen > colWidth {
+			lastVisualRowStart = ((prevLineLen - 1) / colWidth) * colWidth
+		}
+		e.activeBuffer.SetCursorLineCol(bufLine-1, lastVisualRowStart+visualCol)
+	}
 }
 
 func (e *EditorModel) applyWordMotion(forward bool) {

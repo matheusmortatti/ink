@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Exec=elephant
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+Name=Elephant
+Comment=Start Elephant on login

@@ -219,6 +219,37 @@ func TestNormalHandler_UnknownKey_ReturnsNoOp(t *testing.T) {
 	}
 }
 
+func TestNormalHandler_InsertModeTriggers(t *testing.T) {
+	tests := []struct {
+		name        string
+		key         string
+		wantVariant string
+	}{
+		{"i enters insert at cursor", "i", "i"},
+		{"a enters insert after cursor", "a", "a"},
+		{"o enters insert new line below", "o", "o"},
+		{"O enters insert new line above", "O", "O"},
+		{"shift+O enters insert new line above", "shift+O", "O"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := NewNormalHandler()
+			action := h.HandleKey(tt.key)
+			cm, ok := action.(ChangeModeAction)
+			if !ok {
+				t.Fatalf("expected ChangeModeAction, got %T", action)
+			}
+			if cm.Mode != Insert {
+				t.Errorf("got Mode=%v, want Insert", cm.Mode)
+			}
+			if cm.Variant != tt.wantVariant {
+				t.Errorf("got Variant=%q, want %q", cm.Variant, tt.wantVariant)
+			}
+		})
+	}
+}
+
 func TestNormalHandler_PendingStateClearedAfterNonG(t *testing.T) {
 	h := NewNormalHandler()
 
