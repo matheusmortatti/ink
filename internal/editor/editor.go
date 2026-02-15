@@ -314,11 +314,13 @@ func (e *EditorModel) exitInsertMode() {
 		return
 	}
 
-	// Commit gap buffer content back to block
-	e.blocks[e.activeBlockIdx].Raw = e.activeBuffer.Content()
-
-	// Invalidate and re-render the modified block
-	e.cache.InvalidateBlock(e.blocks[e.activeBlockIdx])
+	// Only invalidate cache if content actually changed
+	newContent := e.activeBuffer.Content()
+	if newContent != e.blocks[e.activeBlockIdx].Raw {
+		// Invalidate the old content's cache entry before updating
+		e.cache.InvalidateBlock(e.blocks[e.activeBlockIdx])
+		e.blocks[e.activeBlockIdx].Raw = newContent
+	}
 
 	// Recompose viewport to fully rendered state
 	_ = e.viewport.ClearActiveBlock()

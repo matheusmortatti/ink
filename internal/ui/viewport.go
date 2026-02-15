@@ -45,6 +45,11 @@ func (v *Viewport) SetDimFunc(dimFunc func(string) string) {
 	v.dimFunc = dimFunc
 }
 
+// ColumnWidth returns the current column width for rendering.
+func (v *Viewport) ColumnWidth() int {
+	return v.layout.ColumnWidth
+}
+
 // SetContent renders blocks and composes them into the viewport.
 func (v *Viewport) SetContent(blocks []block.Block, renderer *render.Renderer, cache *render.RenderCache) error {
 	v.blocks = blocks
