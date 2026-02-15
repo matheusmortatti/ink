@@ -557,6 +557,8 @@ func (e *EditorModel) maxLine() int {
 }
 
 func (e *EditorModel) clampCursor() {
+	// TODO: Remove debug logging after performance investigation
+	// log.Printf("[DEBUG] clampCursor called")
 	e.clampCursorLine()
 	e.clampCursorCol()
 }
@@ -603,6 +605,8 @@ func (e *EditorModel) initViewport() {
 	_ = r.PreRenderAll(e.blocks, e.cache)
 
 	e.dimStyle = render.DimStyle(render.SyntaxDimPercent)
+	// Force terminal background detection now (not lazily on first insert mode)
+	_ = e.dimStyle.Render("")
 
 	e.viewport = ui.NewViewport(e.width, e.height)
 	e.viewport.SetDimFunc(func(s string) string { return e.dimStyle.Render(s) })
