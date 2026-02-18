@@ -56,7 +56,7 @@ development_status:
   2-2-insert-mode-and-text-input: done
   2-3-syntax-dimming-for-active-editing-block: done
   2-4-block-transitions-the-mode-unified-block-reveal: done
-  2-5-cursor-position-mapping-between-rendered-and-raw: backlog
+  2-5-cursor-position-mapping-between-rendered-and-raw: done
   2-6-new-block-creation-and-blank-canvas-startup: backlog
   epic-2-retrospective: optional
 

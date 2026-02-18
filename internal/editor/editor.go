@@ -277,26 +277,28 @@ func (e *EditorModel) enterInsertMode(variant string) {
 	e.activeBlockIdx = blockIdx
 	e.activeBuffer = block.NewGapBuffer(e.blocks[blockIdx].Raw)
 
+	// Compute block-relative rendered position and map to raw
+	blockStart := e.viewport.BlockStartLine(blockIdx)
+	renderedLine := e.cursorLine - blockStart
+	renderedCol := e.cursorCol
+	rawLine, rawCol := block.MapRenderedToRaw(e.blocks[blockIdx], renderedLine, renderedCol)
+
 	// Position cursor in gap buffer based on variant
 	switch variant {
 	case "i":
-		// Place at beginning of block (simplified mapping per Dev Notes)
-		e.activeBuffer.SetCursorLineCol(0, 0)
+		e.activeBuffer.SetCursorLineCol(rawLine, rawCol)
 	case "a":
-		// Place after first character (MoveRight safely handles empty blocks)
-		e.activeBuffer.SetCursorLineCol(0, 0)
+		e.activeBuffer.SetCursorLineCol(rawLine, rawCol)
 		e.activeBuffer.MoveRight()
 	case "o":
-		// New line below current line (position to line 0 first — gap buffer starts at end)
-		e.activeBuffer.SetCursorLineCol(0, 0)
+		e.activeBuffer.SetCursorLineCol(rawLine, 0)
 		e.activeBuffer.MoveToLineEnd()
 		e.activeBuffer.Insert('\n')
 	case "O":
-		// New line above current line
-		e.activeBuffer.SetCursorLineCol(0, 0)
+		e.activeBuffer.SetCursorLineCol(rawLine, 0)
 		e.activeBuffer.MoveToLineStart()
 		e.activeBuffer.Insert('\n')
-		e.activeBuffer.SetCursorLineCol(0, 0)
+		e.activeBuffer.SetCursorLineCol(rawLine, 0)
 	}
 
 	if err := e.viewport.SetActiveBlock(blockIdx, e.activeBuffer.Content()); err != nil {
@@ -314,6 +316,9 @@ func (e *EditorModel) exitInsertMode() {
 		return
 	}
 
+	// Capture raw cursor position before clearing
+	rawLine, rawCol := e.activeBuffer.CursorLineCol()
+
 	// Only invalidate cache if content actually changed
 	newContent := e.activeBuffer.Content()
 	if newContent != e.blocks[e.activeBlockIdx].Raw {
@@ -322,16 +327,19 @@ func (e *EditorModel) exitInsertMode() {
 		e.blocks[e.activeBlockIdx].Raw = newContent
 	}
 
+	// Map raw cursor position to rendered position using updated block content
+	renderedLine, renderedCol := block.MapRawToRendered(e.blocks[e.activeBlockIdx], rawLine, rawCol)
+
 	// Recompose viewport to fully rendered state
 	_ = e.viewport.ClearActiveBlock()
 
-	// Place document cursor at the start of the block (simplified mapping)
+	// Place document cursor at the mapped rendered position
 	blockStart := e.viewport.BlockStartLine(e.activeBlockIdx)
 	if blockStart >= 0 {
-		e.cursorLine = blockStart
+		e.cursorLine = blockStart + renderedLine
+		e.cursorCol = renderedCol
+		e.desiredCol = renderedCol
 	}
-	e.cursorCol = 0
-	e.desiredCol = 0
 
 	e.activeBlockIdx = -1
 	e.activeBuffer = nil

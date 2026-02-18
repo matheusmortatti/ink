@@ -1439,6 +1439,140 @@ func TestEditorModel_ResizeDuringInsertMode(t *testing.T) {
 	}
 }
 
+// TestEditorModel_CursorMapping_EnterAtRenderedPosition verifies that entering
+// insert mode maps the cursor to the correct raw position.
+func TestEditorModel_CursorMapping_EnterAtRenderedPosition(t *testing.T) {
+	// Heading: rendered shows "My Title", raw is "## My Title"
+	blocks := block.Parse([]byte("## My Title"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Move cursor to col 3 (should be on 'T' in rendered "My Title")
+	for i := 0; i < 3; i++ {
+		e.Update(tea.KeyPressMsg{Code: 'l'})
+	}
+
+	// Enter insert mode
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+
+	if e.activeBuffer == nil {
+		t.Fatal("expected activeBuffer != nil")
+	}
+
+	// Gap buffer cursor should be at the mapped position
+	bufLine, bufCol := e.activeBuffer.CursorLineCol()
+	if bufLine != 0 {
+		t.Errorf("expected bufLine=0, got %d", bufLine)
+	}
+	// In "## My Title", col 3 in rendered = col 6 in raw (3 for "## " prefix + 3)
+	if bufCol != 6 {
+		t.Errorf("expected bufCol=6, got %d", bufCol)
+	}
+
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+}
+
+// TestEditorModel_CursorMapping_ExitReturnsToRenderedPosition verifies that
+// exiting insert mode maps the raw cursor back to the correct rendered position.
+func TestEditorModel_CursorMapping_ExitReturnsToRenderedPosition(t *testing.T) {
+	blocks := block.Parse([]byte("## My Title"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode at rendered col 0
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+
+	// Cursor starts at raw col 3 (after "## "). Move right 3 times to raw col 6
+	// which is 'T' in "## My Title". This should map back to rendered col 3.
+	for i := 0; i < 3; i++ {
+		e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	}
+
+	// Exit
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	// Cursor should be at rendered col 3 (the position of 'T' in rendered view)
+	if e.CursorCol() != 3 {
+		t.Errorf("expected cursorCol=3 after exit, got %d", e.CursorCol())
+	}
+}
+
+// TestEditorModel_CursorMapping_RoundTrip verifies that enter→exit without
+// typing returns cursor to the same rendered position.
+func TestEditorModel_CursorMapping_RoundTrip(t *testing.T) {
+	blocks := block.Parse([]byte("Hello World"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Move to various columns and test round-trip
+	for targetCol := 0; targetCol < 5; targetCol++ {
+		// Set cursor to target column
+		e.cursorCol = targetCol
+		e.desiredCol = targetCol
+		e.clampCursor()
+
+		lineBefore := e.CursorLine()
+		colBefore := e.CursorCol()
+
+		// Enter and immediately exit (no typing)
+		e.Update(tea.KeyPressMsg{Code: 'i'})
+		e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+		lineAfter := e.CursorLine()
+		colAfter := e.CursorCol()
+
+		if lineAfter != lineBefore || colAfter != colBefore {
+			t.Errorf("col %d: round-trip failed: (%d,%d) → (%d,%d)",
+				targetCol, lineBefore, colBefore, lineAfter, colAfter)
+		}
+	}
+}
+
+// TestEditorModel_CursorMapping_ParagraphEnterPosition verifies cursor mapping
+// for entering a plain paragraph at different positions.
+func TestEditorModel_CursorMapping_ParagraphEnterPosition(t *testing.T) {
+	blocks := block.Parse([]byte("Hello World"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Move to col 5 ('W' in "Hello World")
+	for i := 0; i < 5; i++ {
+		e.Update(tea.KeyPressMsg{Code: 'l'})
+	}
+
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+
+	bufLine, bufCol := e.activeBuffer.CursorLineCol()
+	if bufLine != 0 || bufCol != 5 {
+		t.Errorf("expected buf (0,5), got (%d,%d)", bufLine, bufCol)
+	}
+
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+}
+
+// TestEditorModel_CursorMapping_AppendVariant verifies 'a' enters one position
+// to the right of the mapped position.
+func TestEditorModel_CursorMapping_AppendVariant(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Cursor at col 2 ('l' in "Hello")
+	e.Update(tea.KeyPressMsg{Code: 'l'})
+	e.Update(tea.KeyPressMsg{Code: 'l'})
+
+	// Enter with 'a' (should be one position to the right of mapped pos)
+	e.Update(tea.KeyPressMsg{Code: 'a'})
+
+	_, bufCol := e.activeBuffer.CursorLineCol()
+	// 'a' at rendered col 2 → mapped raw col 2, then +1 from MoveRight = col 3
+	if bufCol != 3 {
+		t.Errorf("expected bufCol=3 for 'a' at rendered col 2, got %d", bufCol)
+	}
+
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+}
+
 // TestEditorModel_TransitionCycle_FullIntegration is a comprehensive integration
 // test covering enter, edit, exit, re-enter flow.
 func TestEditorModel_TransitionCycle_FullIntegration(t *testing.T) {
