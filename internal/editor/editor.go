@@ -151,6 +151,13 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 
 	case vim.InsertNewlineAction:
 		if e.activeBuffer != nil {
+			// Check for double-Enter at end of block to trigger block split
+			content := e.activeBuffer.Content()
+			cursorPos := e.activeBuffer.CursorPos()
+			if cursorPos == len([]rune(content)) && strings.HasSuffix(content, "\n") {
+				e.splitActiveBlock()
+				return e, nil
+			}
 			e.activeBuffer.Insert('\n')
 			e.updateActiveBlockDisplay()
 		}
@@ -346,6 +353,47 @@ func (e *EditorModel) exitInsertMode() {
 	e.modeHandler = vim.NewNormalHandler()
 	e.clampCursor()
 	e.ensureCursorVisible()
+}
+
+// splitActiveBlock splits the current block at the double-Enter point,
+// rendering the current block and creating a new empty block below.
+func (e *EditorModel) splitActiveBlock() {
+	if e.activeBlockIdx < 0 || e.activeBuffer == nil {
+		return
+	}
+
+	// Get content and trim exactly one trailing newline (the first Enter that triggered detection)
+	content := e.activeBuffer.Content()
+	trimmed := strings.TrimSuffix(content, "\n")
+
+	// Update the current block's raw content
+	oldBlock := e.blocks[e.activeBlockIdx]
+	e.cache.InvalidateBlock(oldBlock)
+	e.blocks[e.activeBlockIdx].Raw = trimmed
+
+	// Create new empty paragraph block
+	newBlock := block.Block{Type: block.Paragraph, Raw: ""}
+
+	// Insert into blocks slice at activeBlockIdx + 1
+	idx := e.activeBlockIdx + 1
+	e.blocks = append(e.blocks, block.Block{}) // grow
+	copy(e.blocks[idx+1:], e.blocks[idx:])     // shift right
+	e.blocks[idx] = newBlock                    // insert
+
+	// Clear active block state and recompose viewport
+	_ = e.viewport.ClearActiveBlock()
+	_ = e.viewport.SetContent(e.blocks, e.renderer, e.cache)
+
+	// Enter insert mode on the new block
+	e.activeBlockIdx = idx
+	e.activeBuffer = block.NewGapBuffer("")
+	if err := e.viewport.SetActiveBlock(idx, ""); err != nil {
+		e.activeBlockIdx = -1
+		e.activeBuffer = nil
+		return
+	}
+	e.modeHandler = vim.NewInsertHandler()
+	e.ensureInsertCursorVisible()
 }
 
 // updateActiveBlockDisplay updates the viewport with the current gap buffer content.
@@ -565,8 +613,6 @@ func (e *EditorModel) maxLine() int {
 }
 
 func (e *EditorModel) clampCursor() {
-	// TODO: Remove debug logging after performance investigation
-	// log.Printf("[DEBUG] clampCursor called")
 	e.clampCursorLine()
 	e.clampCursorCol()
 }
@@ -621,5 +667,35 @@ func (e *EditorModel) initViewport() {
 	_ = e.viewport.SetContent(e.blocks, e.renderer, e.cache)
 
 	e.ready = true
+
+	// Context-aware startup: blank/empty content → insert mode.
+	// Bypasses enterInsertMode() intentionally: the block is empty so cursor
+	// mapping is a no-op, and we avoid the overhead of MapRenderedToRaw on a
+	// zero-content block. If enterInsertMode() gains new responsibilities,
+	// this path must be updated to match.
+	if e.isContentEmpty() {
+		if len(e.blocks) == 0 {
+			e.blocks = []block.Block{{Type: block.Paragraph, Raw: ""}}
+			_ = e.viewport.SetContent(e.blocks, e.renderer, e.cache)
+		}
+		e.activeBlockIdx = 0
+		e.activeBuffer = block.NewGapBuffer("")
+		_ = e.viewport.SetActiveBlock(0, "")
+		e.modeHandler = vim.NewInsertHandler()
+		e.ensureInsertCursorVisible()
+	}
+}
+
+// isContentEmpty returns true if the document has no meaningful content.
+func (e *EditorModel) isContentEmpty() bool {
+	if len(e.blocks) == 0 {
+		return true
+	}
+	for _, b := range e.blocks {
+		if b.Raw != "" {
+			return false
+		}
+	}
+	return true
 }
 

@@ -651,7 +651,15 @@ func TestEditorModel_EmptyDocument_NoNavigationCrash(t *testing.T) {
 	e := NewEditor("empty.md", nil)
 	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// All these should not panic
+	// Story 2.6: empty documents start in insert mode (blank canvas). Exit
+	// first so we can test Normal-mode navigation safety on an empty document.
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	if e.CurrentMode() != vim.Normal {
+		t.Fatal("expected Normal mode after Esc on blank canvas")
+	}
+
+	// All these should not panic in normal mode on an empty/minimal document.
 	e.Update(tea.KeyPressMsg{Code: 'j'})
 	e.Update(tea.KeyPressMsg{Code: 'k'})
 	e.Update(tea.KeyPressMsg{Code: 'h'})
@@ -1623,5 +1631,385 @@ func TestEditorModel_TransitionCycle_FullIntegration(t *testing.T) {
 	// Verify surrounding blocks (first block) are still intact
 	if e.blocks[0].Raw != "# Title" {
 		t.Errorf("first block was unexpectedly modified: %q", e.blocks[0].Raw)
+	}
+}
+
+// --- Story 2.6: Block Splitting Tests ---
+
+// TestSplitActiveBlock_AtEndOfParagraph verifies that double-Enter at the end
+// of a paragraph block splits it into two blocks.
+func TestSplitActiveBlock_AtEndOfParagraph(t *testing.T) {
+	blocks := block.Parse([]byte("Hello world"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	initialBlockCount := len(e.blocks)
+
+	// Enter insert mode and move to end
+	e.Update(tea.KeyPressMsg{Code: 'a'})
+	// Move to absolute end
+	e.activeBuffer.MoveToEnd()
+
+	// Press Enter twice (first Enter inserts \n, second triggers split)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if len(e.blocks) != initialBlockCount+1 {
+		t.Errorf("expected %d blocks after split, got %d", initialBlockCount+1, len(e.blocks))
+	}
+
+	// Original block should be trimmed (no trailing newline)
+	if e.blocks[0].Raw != "Hello world" {
+		t.Errorf("expected first block raw='Hello world', got %q", e.blocks[0].Raw)
+	}
+
+	// New block should be empty paragraph
+	if e.blocks[1].Raw != "" {
+		t.Errorf("expected second block raw='', got %q", e.blocks[1].Raw)
+	}
+	if e.blocks[1].Type != block.Paragraph {
+		t.Errorf("expected second block type=Paragraph, got %v", e.blocks[1].Type)
+	}
+}
+
+// TestSplitActiveBlock_CursorInNewBlock verifies that after split, the cursor
+// is positioned in the new block with an empty gap buffer.
+func TestSplitActiveBlock_CursorInNewBlock(t *testing.T) {
+	blocks := block.Parse([]byte("Hello world"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode and move to end
+	e.Update(tea.KeyPressMsg{Code: 'a'})
+	e.activeBuffer.MoveToEnd()
+
+	// Double-Enter to split
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	// Active block should now be the new block (index 1)
+	if e.activeBlockIdx != 1 {
+		t.Errorf("expected activeBlockIdx=1, got %d", e.activeBlockIdx)
+	}
+
+	// Gap buffer should be empty
+	if e.activeBuffer == nil {
+		t.Fatal("expected activeBuffer != nil after split")
+	}
+	if e.activeBuffer.Content() != "" {
+		t.Errorf("expected empty gap buffer, got %q", e.activeBuffer.Content())
+	}
+
+	// Should still be in insert mode
+	if e.CurrentMode() != vim.Insert {
+		t.Errorf("expected Insert mode after split, got %v", e.CurrentMode())
+	}
+}
+
+// TestSplitActiveBlock_CacheInvalidated verifies the old block's cache
+// is invalidated after content change from split. We type extra text first
+// so the pre-split and post-split block content actually differ.
+func TestSplitActiveBlock_CacheInvalidated(t *testing.T) {
+	blocks := block.Parse([]byte("Hello world"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	colWidth := e.viewport.ColumnWidth()
+
+	// Verify block is cached initially (Raw = "Hello world")
+	_, hit := e.cache.Get(e.blocks[0], colWidth)
+	if !hit {
+		t.Fatal("expected block to be in cache before split")
+	}
+
+	// Copy original block before modification
+	origBlock := e.blocks[0] // Raw = "Hello world"
+
+	// Enter insert mode, type text to change content, then double-Enter to split
+	e.Update(tea.KeyPressMsg{Code: 'a'})
+	e.activeBuffer.MoveToEnd()
+	for _, ch := range " extra" {
+		e.Update(tea.KeyPressMsg{Code: ch})
+	}
+	// Buffer is now "Hello world extra"; trigger split
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	// After split: first block Raw = "Hello world extra" (different from origBlock.Raw)
+	// The cache entry for the original "Hello world" should be invalidated
+	_, hitAfter := e.cache.Get(origBlock, colWidth)
+	if hitAfter {
+		t.Error("expected old cache entry (Hello world) to be invalidated after content-changing split")
+	}
+}
+
+// TestDoubleEnter_AtEndTriggersSplit verifies that Enter+Enter at block end triggers split.
+func TestDoubleEnter_AtEndTriggersSplit(t *testing.T) {
+	blocks := block.Parse([]byte("Some text"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode at end
+	e.Update(tea.KeyPressMsg{Code: 'a'})
+	e.activeBuffer.MoveToEnd()
+
+	initialBlocks := len(e.blocks)
+
+	// First Enter: inserts newline
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(e.blocks) != initialBlocks {
+		t.Fatal("first Enter should not trigger split")
+	}
+
+	// Second Enter: triggers split
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(e.blocks) != initialBlocks+1 {
+		t.Errorf("expected split after second Enter, blocks=%d", len(e.blocks))
+	}
+}
+
+// TestDoubleEnter_MidTextNoSplit verifies that double-Enter in the middle
+// of text does NOT trigger a block split.
+func TestDoubleEnter_MidTextNoSplit(t *testing.T) {
+	blocks := block.Parse([]byte("Hello World"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode at position 5 (between "Hello" and " World")
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+	e.activeBuffer.SetCursorPos(5)
+
+	initialBlocks := len(e.blocks)
+
+	// Press Enter twice mid-text
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	// Should NOT split — both Enters should just insert newlines
+	if len(e.blocks) != initialBlocks {
+		t.Errorf("expected no split for mid-text double-Enter, blocks=%d", len(e.blocks))
+	}
+}
+
+// TestDoubleEnter_SingleEnterNoSplit verifies a single Enter just inserts a newline.
+func TestDoubleEnter_SingleEnterNoSplit(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	e.Update(tea.KeyPressMsg{Code: 'a'})
+	e.activeBuffer.MoveToEnd()
+
+	initialBlocks := len(e.blocks)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if len(e.blocks) != initialBlocks {
+		t.Error("single Enter should not trigger split")
+	}
+
+	// Content should have a trailing newline
+	if e.activeBuffer.Content() != "Hello\n" {
+		t.Errorf("expected 'Hello\\n', got %q", e.activeBuffer.Content())
+	}
+}
+
+// --- Story 2.6: Blank Canvas Startup Tests ---
+
+// TestBlankCanvas_NoArgs verifies that opening with no file creates
+// a single empty block in insert mode.
+func TestBlankCanvas_NoArgs(t *testing.T) {
+	e := NewEditor("", nil)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	if e.CurrentMode() != vim.Insert {
+		t.Errorf("expected Insert mode for blank canvas, got %v", e.CurrentMode())
+	}
+
+	if len(e.blocks) != 1 {
+		t.Fatalf("expected 1 block for blank canvas, got %d", len(e.blocks))
+	}
+
+	if e.blocks[0].Raw != "" {
+		t.Errorf("expected empty block raw, got %q", e.blocks[0].Raw)
+	}
+
+	if e.blocks[0].Type != block.Paragraph {
+		t.Errorf("expected Paragraph type, got %v", e.blocks[0].Type)
+	}
+
+	if e.activeBlockIdx != 0 {
+		t.Errorf("expected activeBlockIdx=0, got %d", e.activeBlockIdx)
+	}
+
+	if e.activeBuffer == nil {
+		t.Fatal("expected activeBuffer != nil for blank canvas")
+	}
+}
+
+// TestBlankCanvas_EmptyFile verifies that opening an empty file
+// results in insert mode. Uses actual block.Parse output to match the
+// code path through main.go for a real empty file.
+func TestBlankCanvas_EmptyFile(t *testing.T) {
+	emptyBlocks := block.Parse([]byte(""))
+	e := NewEditor("empty.md", emptyBlocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	if e.CurrentMode() != vim.Insert {
+		t.Errorf("expected Insert mode for empty file, got %v", e.CurrentMode())
+	}
+
+	if len(e.blocks) != 1 {
+		t.Fatalf("expected 1 block for empty file, got %d", len(e.blocks))
+	}
+}
+
+// TestStartup_FileWithContent_NormalMode verifies that opening a file
+// with content stays in normal mode.
+func TestStartup_FileWithContent_NormalMode(t *testing.T) {
+	blocks := block.Parse([]byte("# Hello\n\nWorld"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	if e.CurrentMode() != vim.Normal {
+		t.Errorf("expected Normal mode for file with content, got %v", e.CurrentMode())
+	}
+
+	if e.activeBlockIdx != -1 {
+		t.Errorf("expected activeBlockIdx=-1 in normal mode, got %d", e.activeBlockIdx)
+	}
+}
+
+// TestSplitActiveBlock_EmptyBlock verifies that splitting on a block
+// with just a newline creates a second empty block.
+func TestSplitActiveBlock_EmptyBlock(t *testing.T) {
+	// Start with blank canvas (insert mode, single empty block)
+	e := NewEditor("", nil)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// We're in insert mode on an empty block. Press Enter once then Enter again.
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	// Now content is "\n", cursor at end
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	// Should have split
+	if len(e.blocks) != 2 {
+		t.Fatalf("expected 2 blocks after split on empty block, got %d", len(e.blocks))
+	}
+
+	// Both blocks should be empty (or nearly so)
+	if e.blocks[0].Raw != "" {
+		t.Errorf("expected first block empty, got %q", e.blocks[0].Raw)
+	}
+	if e.blocks[1].Raw != "" {
+		t.Errorf("expected second block empty, got %q", e.blocks[1].Raw)
+	}
+}
+
+// TestSplitActiveBlock_MultipleRapidSplits verifies that three consecutive
+// splits create 4 blocks total.
+func TestSplitActiveBlock_MultipleRapidSplits(t *testing.T) {
+	blocks := block.Parse([]byte("Start"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode at end
+	e.Update(tea.KeyPressMsg{Code: 'a'})
+	e.activeBuffer.MoveToEnd()
+
+	// First split
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if len(e.blocks) != 2 {
+		t.Fatalf("expected 2 blocks after first split, got %d", len(e.blocks))
+	}
+
+	// Second split (on new empty block — need Enter then Enter)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if len(e.blocks) != 3 {
+		t.Fatalf("expected 3 blocks after second split, got %d", len(e.blocks))
+	}
+
+	// Third split
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if len(e.blocks) != 4 {
+		t.Errorf("expected 4 blocks after third split, got %d", len(e.blocks))
+	}
+
+	// First block should still have original content
+	if e.blocks[0].Raw != "Start" {
+		t.Errorf("expected first block 'Start', got %q", e.blocks[0].Raw)
+	}
+}
+
+// TestSplitActiveBlock_Performance verifies that block splitting meets the
+// NFR2 <50ms requirement (AC6: split is instant, typing flow uninterrupted).
+func TestSplitActiveBlock_Performance(t *testing.T) {
+	blocks := block.Parse([]byte("Hello world paragraph content for split performance test"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	e.Update(tea.KeyPressMsg{Code: 'a'})
+	e.activeBuffer.MoveToEnd()
+
+	start := time.Now()
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	duration := time.Since(start)
+
+	const maxTime = 50 * time.Millisecond
+	if duration > maxTime {
+		t.Errorf("splitActiveBlock took %v, exceeds %v NFR2 requirement", duration, maxTime)
+	}
+
+	if len(e.blocks) != 2 {
+		t.Fatalf("expected split to occur, got %d blocks", len(e.blocks))
+	}
+}
+
+// TestBlankCanvas_CursorPosition verifies the cursor is at (0,0) on blank canvas.
+func TestBlankCanvas_CursorPosition(t *testing.T) {
+	e := NewEditor("", nil)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	if e.activeBuffer == nil {
+		t.Fatal("expected activeBuffer != nil")
+	}
+
+	bufLine, bufCol := e.activeBuffer.CursorLineCol()
+	if bufLine != 0 || bufCol != 0 {
+		t.Errorf("expected cursor at (0,0), got (%d,%d)", bufLine, bufCol)
+	}
+}
+
+// TestBlockSplit_TypeAfterSplit verifies that typing works in the new block after split.
+func TestBlockSplit_TypeAfterSplit(t *testing.T) {
+	blocks := block.Parse([]byte("First block"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode at end and split
+	e.Update(tea.KeyPressMsg{Code: 'a'})
+	e.activeBuffer.MoveToEnd()
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	// Type in the new block
+	for _, ch := range "Second block" {
+		e.Update(tea.KeyPressMsg{Code: ch})
+	}
+
+	// Exit insert mode
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	if e.blocks[1].Raw != "Second block" {
+		t.Errorf("expected second block 'Second block', got %q", e.blocks[1].Raw)
+	}
+	if e.blocks[0].Raw != "First block" {
+		t.Errorf("expected first block 'First block', got %q", e.blocks[0].Raw)
 	}
 }

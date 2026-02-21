@@ -178,7 +178,12 @@ func (v *Viewport) composeBlocks() error {
 			if err != nil {
 				return err
 			}
-			blockLines := strings.Split(rendered, "\n")
+			// Glamour output ends with one or more '\n'. Strip them before splitting
+			// so the viewport's explicit inter-block separator (added below) is the
+			// sole source of spacing between blocks. Without this, the trailing '\n'
+			// produces an extra blank line that the raw-edit path does not have,
+			// causing insert-mode and normal-mode spacing to be inconsistent.
+			blockLines := strings.Split(strings.TrimRight(rendered, "\n"), "\n")
 			for _, line := range blockLines {
 				allLines = append(allLines, margin+line)
 			}
