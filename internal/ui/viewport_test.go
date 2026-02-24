@@ -28,7 +28,7 @@ func TestNewViewport(t *testing.T) {
 }
 
 func TestViewport_SetContent_BlockCompositing(t *testing.T) {
-	r, err := render.NewRenderer(80)
+	r, err := render.NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestViewport_SetContent_BlockCompositing(t *testing.T) {
 }
 
 func TestViewport_SetContent_BlocksSeparatedByBlankLine(t *testing.T) {
-	r, err := render.NewRenderer(80)
+	r, err := render.NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestViewport_SetContent_BlocksSeparatedByBlankLine(t *testing.T) {
 }
 
 func TestViewport_ContentCentering(t *testing.T) {
-	r, err := render.NewRenderer(80)
+	r, err := render.NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestViewport_ScrollToBottom(t *testing.T) {
 }
 
 func TestViewport_Resize(t *testing.T) {
-	r, err := render.NewRenderer(80)
+	r, err := render.NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestViewport_Resize(t *testing.T) {
 }
 
 func TestViewport_Resize_RecomposesContent(t *testing.T) {
-	r, err := render.NewRenderer(80)
+	r, err := render.NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestViewport_Resize_RecomposesContent(t *testing.T) {
 }
 
 func TestViewport_EmptyDocument(t *testing.T) {
-	r, err := render.NewRenderer(80)
+	r, err := render.NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestViewport_EmptyDocument(t *testing.T) {
 }
 
 func TestViewport_EmptyBlocks(t *testing.T) {
-	r, err := render.NewRenderer(80)
+	r, err := render.NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestViewport_ViewportHeight(t *testing.T) {
 }
 
 func TestViewport_ContentHeight_AfterSetContent(t *testing.T) {
-	r, err := render.NewRenderer(80)
+	r, err := render.NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -394,7 +394,7 @@ func TestViewport_ScrollDown_ContentShorterThanViewport(t *testing.T) {
 }
 
 func TestViewport_SetActiveBlock_DisplaysRaw(t *testing.T) {
-	r, err := render.NewRenderer(80)
+	r, err := render.NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestViewport_SetActiveBlock_DisplaysRaw(t *testing.T) {
 }
 
 func TestViewport_ClearActiveBlock_RestoresRendered(t *testing.T) {
-	r, err := render.NewRenderer(80)
+	r, err := render.NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -454,7 +454,7 @@ func TestViewport_ClearActiveBlock_RestoresRendered(t *testing.T) {
 }
 
 func TestViewport_UpdateActiveBlockContent(t *testing.T) {
-	r, err := render.NewRenderer(80)
+	r, err := render.NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -531,7 +531,7 @@ func TestWrapLine_ANSI_EmptyLine(t *testing.T) {
 }
 
 func TestViewport_SetDimFunc_AppliesDimming(t *testing.T) {
-	r, err := render.NewRenderer(80)
+	r, err := render.NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}

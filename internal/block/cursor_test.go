@@ -40,9 +40,10 @@ func TestClassifyRunes_Italic(t *testing.T) {
 }
 
 func TestClassifyRunes_InlineCode(t *testing.T) {
-	// `code` → markers at 0 and 5
+	// `code` — Glamour renders backtick markers as visible spaces, so they
+	// occupy a visual column and are treated as visible in cursor mapping.
 	vis := classifyRunes("`code`")
-	expected := []bool{false, true, true, true, true, false}
+	expected := []bool{true, true, true, true, true, true}
 	if len(vis) != len(expected) {
 		t.Fatalf("length mismatch: got %d, want %d", len(vis), len(expected))
 	}
@@ -225,15 +226,19 @@ func TestMapRenderedToRaw_ParagraphWithBold(t *testing.T) {
 }
 
 func TestMapRenderedToRaw_Heading(t *testing.T) {
+	// H2: Glamour keeps "## " as visible text in the rendered output.
+	// renderedCol is measured from the start of the full rendered line.
 	b := Block{Type: Heading, Raw: "## My Title", Level: 2}
 	tests := []struct {
 		name        string
 		rLine, rCol int
 		wLine, wCol int
 	}{
-		{"start", 0, 0, 0, 3},       // 'M' → after "## "
-		{"middle", 0, 3, 0, 6},      // 'T' → position 6
-		{"end", 0, 7, 0, 10},        // 'e' → position 10
+		{"first #", 0, 0, 0, 0},    // '#' → raw '#' at col 0 (1:1 in prefix zone)
+		{"space", 0, 2, 0, 2},      // ' ' → raw ' ' at col 2 (1:1)
+		{"M", 0, 3, 0, 3},          // 'M' → raw 'M' at col 3 (first content char)
+		{"T", 0, 6, 0, 6},          // 'T' → raw 'T' at col 6
+		{"e", 0, 10, 0, 10},        // 'e' → raw 'e' at col 10
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -247,19 +252,21 @@ func TestMapRenderedToRaw_Heading(t *testing.T) {
 }
 
 func TestMapRenderedToRaw_HeadingLevel1(t *testing.T) {
+	// H1: Glamour replaces "# " with styling only; rendered content starts at col 0.
 	b := Block{Type: Heading, Raw: "# Title", Level: 1}
-	rl, rc := MapRenderedToRaw(b, 0, 0)
+	rl, rc := MapRenderedToRaw(b, 0, 0) // rendered col 0 = 'T' → raw col 2
 	if rl != 0 || rc != 2 {
 		t.Errorf("MapRenderedToRaw(h1, 0, 0) = (%d, %d), want (0, 2)", rl, rc)
 	}
 }
 
 func TestMapRenderedToRaw_HeadingWithBold(t *testing.T) {
+	// H2: Glamour keeps "## " visible; "**" bold markers are stripped.
+	// Rendered: "## Bold Title" — col 0='#', col 3='B'.
 	b := Block{Type: Heading, Raw: "## **Bold Title**", Level: 2}
-	// rendered: "Bold Title" (no ## prefix, no ** markers)
-	rl, rc := MapRenderedToRaw(b, 0, 0) // 'B' → after "## " and "**"
+	rl, rc := MapRenderedToRaw(b, 0, 3) // 'B' at rendered col 3 → raw col 5 (after "## **")
 	if rl != 0 || rc != 5 {
-		t.Errorf("MapRenderedToRaw(bold heading, 0, 0) = (%d, %d), want (0, 5)", rl, rc)
+		t.Errorf("MapRenderedToRaw(bold heading, 0, 3) = (%d, %d), want (0, 5)", rl, rc)
 	}
 }
 
@@ -282,34 +289,54 @@ func TestMapRenderedToRaw_CodeFence(t *testing.T) {
 }
 
 func TestMapRenderedToRaw_BlockQuote(t *testing.T) {
+	// Glamour replaces "> " with "│ " (same visual width) and adds an empty
+	// leading line. rendered line 0 = empty, rendered line 1 = first content.
 	b := Block{Type: BlockQuote, Raw: "> quoted text"}
-	rl, rc := MapRenderedToRaw(b, 0, 0) // 'q' → after "> "
-	if rl != 0 || rc != 2 {
-		t.Errorf("MapRenderedToRaw(blockquote, 0, 0) = (%d, %d), want (0, 2)", rl, rc)
+	rl, rc := MapRenderedToRaw(b, 1, 0) // rendered content line 1; '│' → raw '>' at col 0
+	if rl != 0 || rc != 0 {
+		t.Errorf("MapRenderedToRaw(blockquote, 1, 0) = (%d, %d), want (0, 0)", rl, rc)
 	}
-	rl, rc = MapRenderedToRaw(b, 0, 7) // 't' in "text" → col 9 in raw
+	rl, rc = MapRenderedToRaw(b, 1, 2) // 'q' → raw col 2
+	if rl != 0 || rc != 2 {
+		t.Errorf("MapRenderedToRaw(blockquote, 1, 2) = (%d, %d), want (0, 2)", rl, rc)
+	}
+	rl, rc = MapRenderedToRaw(b, 1, 9) // 't' in "text" → raw col 9
 	if rl != 0 || rc != 9 {
-		t.Errorf("MapRenderedToRaw(blockquote, 0, 7) = (%d, %d), want (0, 9)", rl, rc)
+		t.Errorf("MapRenderedToRaw(blockquote, 1, 9) = (%d, %d), want (0, 9)", rl, rc)
 	}
 }
 
 func TestMapRenderedToRaw_BlockQuoteMultiLine(t *testing.T) {
-	b := Block{Type: BlockQuote, Raw: "> line one\n> line two"}
-	rl, rc := MapRenderedToRaw(b, 1, 0)
-	if rl != 1 || rc != 2 {
-		t.Errorf("MapRenderedToRaw(bq line2, 1, 0) = (%d, %d), want (1, 2)", rl, rc)
+	// Glamour adds an empty leading line, so rendered 1 = first content line.
+	// Consecutive "> lines" are joined into one paragraph; use a blank "> "
+	// separator to keep them distinct.
+	// Raw: "> line one\n>\n> line two" → raw[0]="line one", raw[1]="", raw[2]="line two"
+	b := Block{Type: BlockQuote, Raw: "> line one\n>\n> line two"}
+	// rendered 1 = "│ line one" → raw line 0
+	rl, rc := MapRenderedToRaw(b, 1, 0) // '│' → raw '>' at col 0
+	if rl != 0 || rc != 0 {
+		t.Errorf("MapRenderedToRaw(bq line1, 1, 0) = (%d, %d), want (0, 0)", rl, rc)
+	}
+	// rendered 3 = "│ line two" → raw line 2
+	rl, rc = MapRenderedToRaw(b, 3, 2) // 'l' in "line two" → raw (2, 2)
+	if rl != 2 || rc != 2 {
+		t.Errorf("MapRenderedToRaw(bq line3, 3, 2) = (%d, %d), want (2, 2)", rl, rc)
 	}
 }
 
 func TestMapRenderedToRaw_List(t *testing.T) {
+	// Glamour replaces "- " with "• " (same visual width) and adds an empty
+	// leading line. rendered 0 = empty, rendered 1 = first item, rendered 2 = second.
 	b := Block{Type: List, Raw: "- item one\n- item two"}
 	tests := []struct {
 		rLine, rCol int
 		wLine, wCol int
 	}{
-		{0, 0, 0, 2},  // 'i' in "item one" → after "- "
-		{0, 4, 0, 6},  // 'o' in "one"
-		{1, 0, 1, 2},  // 'i' in "item two"
+		{0, 0, 0, 0},  // rendered empty line clamps to raw line 0, col 0
+		{1, 0, 0, 0},  // '•' in "• item one" → raw '-' at (0, 0)
+		{1, 2, 0, 2},  // 'i' in "item one" → raw (0, 2)
+		{1, 6, 0, 6},  // 'o' in "one" → raw (0, 6)
+		{2, 2, 1, 2},  // 'i' in "item two" → raw (1, 2)
 	}
 	for _, tt := range tests {
 		rl, rc := MapRenderedToRaw(b, tt.rLine, tt.rCol)
@@ -321,22 +348,34 @@ func TestMapRenderedToRaw_List(t *testing.T) {
 }
 
 func TestMapRenderedToRaw_OrderedList(t *testing.T) {
+	// Glamour keeps "1. " intact and adds an empty leading line.
+	// rendered 1 = first item, rendered 2 = second item.
 	b := Block{Type: List, Raw: "1. first\n2. second"}
-	rl, rc := MapRenderedToRaw(b, 0, 0) // 'f' → after "1. "
+	rl, rc := MapRenderedToRaw(b, 0, 0) // rendered empty line clamps to raw (0, 0)
+	if rl != 0 || rc != 0 {
+		t.Errorf("MapRenderedToRaw(ol, 0, 0) = (%d, %d), want (0, 0)", rl, rc)
+	}
+	rl, rc = MapRenderedToRaw(b, 1, 3) // 'f' in "first" at rendered line 1 → raw (0, 3)
 	if rl != 0 || rc != 3 {
-		t.Errorf("MapRenderedToRaw(ol, 0, 0) = (%d, %d), want (0, 3)", rl, rc)
+		t.Errorf("MapRenderedToRaw(ol, 1, 3) = (%d, %d), want (0, 3)", rl, rc)
 	}
 }
 
 func TestMapRenderedToRaw_Table(t *testing.T) {
+	// Glamour table layout (ANSI-stripped):
+	//   rendered 0: empty padding line
+	//   rendered 1: header row
+	//   rendered 2: graphical border (─────┼─────)
+	//   rendered 3: first data row
 	b := Block{Type: Table, Raw: "| a | b |\n| --- | --- |\n| 1 | 2 |"}
 	tests := []struct {
 		name        string
 		rLine, rCol int
 		wLine, wCol int
 	}{
-		{"header", 0, 0, 0, 2},      // header row, first cell
-		{"data row", 1, 0, 2, 2},     // first data row → raw line 2 (skipping separator)
+		{"empty leading line", 0, 0, 0, 2}, // empty line → header (raw 0)
+		{"header", 1, 0, 0, 2},             // rendered header → raw line 0
+		{"data row", 3, 0, 2, 2},           // rendered data → raw line 2 (skipping separator)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -350,15 +389,19 @@ func TestMapRenderedToRaw_Table(t *testing.T) {
 }
 
 func TestMapRawToRendered_Table(t *testing.T) {
+	// Inverse of the Glamour table layout:
+	//   raw header (line 0)    → rendered line 1
+	//   raw separator (line 1) → rendered line 2 (Glamour border)
+	//   raw data (line 2)      → rendered line 3
 	b := Block{Type: Table, Raw: "| a | b |\n| --- | --- |\n| 1 | 2 |"}
 	tests := []struct {
 		name        string
 		rLine, rCol int
 		wLine, wCol int
 	}{
-		{"header", 0, 2, 0, 0},           // raw header → rendered line 0
-		{"separator", 1, 0, 0, 0},        // separator row → maps to header (rendered 0)
-		{"data row", 2, 2, 1, 0},         // raw line 2 → rendered line 1 (skipping separator)
+		{"header", 0, 2, 1, 0},      // raw header → rendered line 1
+		{"separator", 1, 0, 2, 0},   // separator → rendered Glamour border (line 2)
+		{"data row", 2, 2, 3, 0},    // raw data → rendered line 3
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -401,15 +444,17 @@ func TestMapRawToRendered_ParagraphWithBold(t *testing.T) {
 }
 
 func TestMapRawToRendered_Heading(t *testing.T) {
+	// H2: Glamour keeps "## " visible; prefix zone is 1:1, content uses marker adjustment.
 	b := Block{Type: Heading, Raw: "## My Title", Level: 2}
 	tests := []struct {
 		rawCol  int
 		wantCol int
 	}{
-		{0, 0},  // on '#', maps to rendered 0
-		{2, 0},  // on space after '##', maps to rendered 0
-		{3, 0},  // 'M' → visual 0
-		{6, 3},  // 'T' → visual 3
+		{0, 0},   // '#' → rendered col 0 (1:1 in prefix zone)
+		{2, 2},   // ' ' after "##" → rendered col 2 (1:1)
+		{3, 3},   // 'M' → rendered col 3
+		{6, 6},   // 'T' → rendered col 6
+		{10, 10}, // 'e' → rendered col 10
 	}
 	for _, tt := range tests {
 		rl, rc := MapRawToRendered(b, 0, tt.rawCol)
@@ -440,40 +485,42 @@ func TestMapRawToRendered_CodeFence(t *testing.T) {
 }
 
 func TestMapRawToRendered_BlockQuote(t *testing.T) {
+	// Glamour adds an empty leading line; raw line 0 maps to rendered line 1.
 	b := Block{Type: BlockQuote, Raw: "> some text"}
 	tests := []struct {
 		rawCol  int
 		wantCol int
 	}{
-		{0, 0},  // '>' → rendered 0
-		{1, 0},  // ' ' after '>' → rendered 0
-		{2, 0},  // 's' → rendered 0
-		{5, 3},  // 'e' → rendered 3
+		{0, 0},  // '>' → rendered col 0 (1:1 in prefix zone)
+		{1, 1},  // ' ' after '>' → rendered col 1
+		{2, 2},  // 's' → rendered col 2
+		{5, 5},  // 'e' in "some" → rendered col 5
 	}
 	for _, tt := range tests {
 		rl, rc := MapRawToRendered(b, 0, tt.rawCol)
-		if rl != 0 || rc != tt.wantCol {
-			t.Errorf("MapRawToRendered(bq, 0, %d) = (%d, %d), want (0, %d)",
+		if rl != 1 || rc != tt.wantCol {
+			t.Errorf("MapRawToRendered(bq, 0, %d) = (%d, %d), want (1, %d)",
 				tt.rawCol, rl, rc, tt.wantCol)
 		}
 	}
 }
 
 func TestMapRawToRendered_List(t *testing.T) {
+	// Glamour adds an empty leading line; raw line 0 maps to rendered line 1.
 	b := Block{Type: List, Raw: "- item text"}
 	tests := []struct {
 		rawCol  int
 		wantCol int
 	}{
-		{0, 0},  // '-' → rendered 0
-		{1, 0},  // ' ' → rendered 0
-		{2, 0},  // 'i' → rendered 0
-		{6, 4},  // ' ' before "text" → rendered 4
+		{0, 0},  // '-' → rendered col 0 (1:1 in prefix zone)
+		{1, 1},  // ' ' → rendered col 1
+		{2, 2},  // 'i' → rendered col 2
+		{6, 6},  // ' ' before "text" → rendered col 6
 	}
 	for _, tt := range tests {
 		rl, rc := MapRawToRendered(b, 0, tt.rawCol)
-		if rl != 0 || rc != tt.wantCol {
-			t.Errorf("MapRawToRendered(list, 0, %d) = (%d, %d), want (0, %d)",
+		if rl != 1 || rc != tt.wantCol {
+			t.Errorf("MapRawToRendered(list, 0, %d) = (%d, %d), want (1, %d)",
 				tt.rawCol, rl, rc, tt.wantCol)
 		}
 	}
@@ -493,9 +540,10 @@ func TestBidirectional_Paragraph(t *testing.T) {
 }
 
 func TestBidirectional_Heading(t *testing.T) {
+	// H2: Glamour keeps "## " so the full rendered line is "## My Title".
+	// Round-trip: rendered col → raw col → rendered col should be identity.
 	b := Block{Type: Heading, Raw: "## My Title", Level: 2}
-	// Test round-trip for visual positions (rendered → raw → rendered)
-	for col := 0; col < 8; col++ {
+	for col := 0; col < 11; col++ {
 		rl, rc := MapRenderedToRaw(b, 0, col)
 		rl2, rc2 := MapRawToRendered(b, rl, rc)
 		if rl2 != 0 || rc2 != col {

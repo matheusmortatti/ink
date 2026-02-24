@@ -18,13 +18,29 @@ func MapRenderedToRaw(b Block, renderedLine, renderedCol int) (rawLine, rawCol i
 		if rawLine < len(rawLines) {
 			content := rawLines[rawLine]
 			runes := []rune(content)
-			if prefix < len(runes) {
-				rawCol = prefix + rawColFromVisualCol(string(runes[prefix:]), renderedCol)
+			if b.Level == 1 {
+				// H1: Glamour replaces the "# " prefix with background styling only,
+				// so the rendered content starts at visual column 0.
+				if prefix < len(runes) {
+					rawCol = prefix + rawColFromVisualCol(string(runes[prefix:]), renderedCol)
+				} else {
+					rawCol = prefix + renderedCol
+				}
 			} else {
-				rawCol = prefix + renderedCol
+				// H2+: Glamour keeps "## " etc. as visible text in the rendered output.
+				// renderedCol is measured from the start of the full rendered line, so
+				// cols within the prefix zone map 1:1 to raw; cols past the prefix need
+				// inline-marker adjustment.
+				if renderedCol < prefix {
+					rawCol = renderedCol
+				} else if prefix < len(runes) {
+					rawCol = prefix + rawColFromVisualCol(string(runes[prefix:]), renderedCol-prefix)
+				} else {
+					rawCol = renderedCol
+				}
 			}
 		} else {
-			rawCol = prefix + renderedCol
+			rawCol = b.Level + 1 + renderedCol
 		}
 
 	case CodeFence:
@@ -35,30 +51,51 @@ func MapRenderedToRaw(b Block, renderedLine, renderedCol int) (rawLine, rawCol i
 		rawCol = renderedCol
 
 	case BlockQuote:
-		rawLine = renderedLine
+		// Glamour adds one empty padding line before blockquote content.
+		// rendered 0 = empty, rendered 1 = first content line, etc.
+		rawLine = renderedLine - 1
+		if rawLine < 0 {
+			rawLine = 0
+		}
 		if rawLine < len(rawLines) {
 			prefix := blockQuotePrefixLen(rawLines[rawLine])
 			content := rawLines[rawLine]
 			runes := []rune(content)
-			if prefix < len(runes) {
-				rawCol = prefix + rawColFromVisualCol(string(runes[prefix:]), renderedCol)
+			// Glamour replaces ">" with "│" but keeps the same visual width.
+			// renderedCol is measured from the start of the full rendered line
+			// (including the │ prefix), so cols in the prefix zone map 1:1 to raw;
+			// cols past the prefix need inline-marker adjustment.
+			if renderedCol < prefix {
+				rawCol = renderedCol
+			} else if prefix < len(runes) {
+				rawCol = prefix + rawColFromVisualCol(string(runes[prefix:]), renderedCol-prefix)
 			} else {
-				rawCol = prefix + renderedCol
+				rawCol = renderedCol
 			}
 		} else {
 			rawCol = renderedCol
 		}
 
 	case List:
-		rawLine = renderedLine
+		// Glamour adds one empty padding line before list content.
+		// rendered 0 = empty, rendered 1 = first item, rendered 2 = second item, etc.
+		rawLine = renderedLine - 1
+		if rawLine < 0 {
+			rawLine = 0
+		}
 		if rawLine < len(rawLines) {
 			prefix := listPrefixLen(rawLines[rawLine])
 			content := rawLines[rawLine]
 			runes := []rune(content)
-			if prefix < len(runes) {
-				rawCol = prefix + rawColFromVisualCol(string(runes[prefix:]), renderedCol)
+			// Glamour replaces "-" / "*" with "•" but keeps the same visual width.
+			// renderedCol is measured from the start of the full rendered line,
+			// so cols in the prefix zone map 1:1 to raw.
+			if renderedCol < prefix {
+				rawCol = renderedCol
+			} else if prefix < len(runes) {
+				rawCol = prefix + rawColFromVisualCol(string(runes[prefix:]), renderedCol-prefix)
 			} else {
-				rawCol = prefix + renderedCol
+				rawCol = renderedCol
 			}
 		} else {
 			rawCol = renderedCol
@@ -106,10 +143,22 @@ func MapRawToRendered(b Block, rawLine, rawCol int) (renderedLine, renderedCol i
 		prefix := b.Level + 1
 		if rawLine < len(rawLines) {
 			runes := []rune(rawLines[rawLine])
-			if rawCol <= prefix {
-				renderedCol = 0
-			} else if prefix < len(runes) {
-				renderedCol = visualColFromRawCol(string(runes[prefix:]), rawCol-prefix)
+			if b.Level == 1 {
+				// H1: Glamour strips the prefix; raw prefix cols all map to rendered 0.
+				if rawCol <= prefix {
+					renderedCol = 0
+				} else if prefix < len(runes) {
+					renderedCol = visualColFromRawCol(string(runes[prefix:]), rawCol-prefix)
+				}
+			} else {
+				// H2+: Glamour keeps the prefix as visible text; 1:1 in prefix zone.
+				if rawCol < prefix {
+					renderedCol = rawCol
+				} else if prefix < len(runes) {
+					renderedCol = prefix + visualColFromRawCol(string(runes[prefix:]), rawCol-prefix)
+				} else {
+					renderedCol = rawCol
+				}
 			}
 		}
 
@@ -126,30 +175,34 @@ func MapRawToRendered(b Block, rawLine, rawCol int) (renderedLine, renderedCol i
 		}
 
 	case BlockQuote:
-		renderedLine = rawLine
+		// Glamour adds one empty padding line before blockquote content.
+		renderedLine = rawLine + 1
 		if rawLine < len(rawLines) {
 			prefix := blockQuotePrefixLen(rawLines[rawLine])
-			if rawCol <= prefix {
-				renderedCol = 0
+			runes := []rune(rawLines[rawLine])
+			// Glamour keeps the same visual width as "> "; 1:1 in prefix zone.
+			if rawCol < prefix {
+				renderedCol = rawCol
+			} else if prefix < len(runes) {
+				renderedCol = prefix + visualColFromRawCol(string(runes[prefix:]), rawCol-prefix)
 			} else {
-				runes := []rune(rawLines[rawLine])
-				if prefix < len(runes) {
-					renderedCol = visualColFromRawCol(string(runes[prefix:]), rawCol-prefix)
-				}
+				renderedCol = rawCol
 			}
 		}
 
 	case List:
-		renderedLine = rawLine
+		// Glamour adds one empty padding line before list content.
+		renderedLine = rawLine + 1
 		if rawLine < len(rawLines) {
 			prefix := listPrefixLen(rawLines[rawLine])
-			if rawCol <= prefix {
-				renderedCol = 0
+			runes := []rune(rawLines[rawLine])
+			// Glamour keeps the same visual width as "- "; 1:1 in prefix zone.
+			if rawCol < prefix {
+				renderedCol = rawCol
+			} else if prefix < len(runes) {
+				renderedCol = prefix + visualColFromRawCol(string(runes[prefix:]), rawCol-prefix)
 			} else {
-				runes := []rune(rawLines[rawLine])
-				if prefix < len(runes) {
-					renderedCol = visualColFromRawCol(string(runes[prefix:]), rawCol-prefix)
-				}
+				renderedCol = rawCol
 			}
 		}
 
@@ -239,12 +292,13 @@ func classifyRange(runes []rune, visible []bool, start, end int) {
 		}
 
 		// Code span: `code`
+		// Glamour renders backtick markers as spaces (still a visible position),
+		// so we leave them marked as visible and skip nested-marker parsing inside.
 		if runes[i] == '`' {
 			closePos := findClosingDelim(runes, i+1, '`', 1)
 			if closePos >= 0 && closePos < end {
-				visible[i] = false
-				visible[closePos] = false
-				// Content between backticks is literal (no nested markers)
+				// visible[i] and visible[closePos] remain true — backticks appear
+				// as spaces in the rendered output and occupy a visual column.
 				i = closePos + 1
 				continue
 			}
@@ -453,19 +507,40 @@ func listPrefixLen(line string) int {
 }
 
 // mapRenderedToRawTable maps rendered table position to raw.
-// Skips separator rows (e.g., | --- | --- |) which exist in raw but not rendered.
+//
+// Glamour's table rendering layout (ANSI-stripped, after stripRenderPadding):
+//
+//	rendered line 0 : empty padding line
+//	rendered line 1 : header row
+//	rendered line 2 : graphical border (─────┼─────)
+//	rendered line 3+: data rows (one per raw non-separator data line)
+//
+// The raw "| --- | --- |" separator does not appear as its own rendered line;
+// instead Glamour draws the border at rendered line 2.
 func mapRenderedToRawTable(b Block, renderedLine, renderedCol int) (int, int) {
 	rawLines := strings.Split(b.Raw, "\n")
-	// Build mapping: rendered line index → raw line index (skip separators)
+	// Build list of non-separator raw line indices (header, then data rows).
 	var contentLines []int
 	for i, line := range rawLines {
 		if !isTableSeparator(line) {
 			contentLines = append(contentLines, i)
 		}
 	}
-	rawLine := renderedLine
-	if renderedLine < len(contentLines) {
-		rawLine = contentLines[renderedLine]
+	// Subtract 1 to account for the empty leading padding line.
+	// rendered 0 → adjusted -1 → clamp to 0 (header)
+	// rendered 1 → adjusted  0 → contentLines[0] (header)
+	// rendered 2 → adjusted  1 → contentLines[1] (first data row — border maps here)
+	// rendered 3 → adjusted  2 → fallback rawLine=2 (first data row)
+	adjusted := renderedLine - 1
+	if adjusted < 0 {
+		adjusted = 0
+	}
+	rawLine := renderedLine - 1 // fallback
+	if rawLine < 0 {
+		rawLine = 0
+	}
+	if adjusted < len(contentLines) {
+		rawLine = contentLines[adjusted]
 	}
 	if rawLine < len(rawLines) {
 		return rawLine, mapTableCol(rawLines[rawLine], renderedCol)
@@ -474,28 +549,32 @@ func mapRenderedToRawTable(b Block, renderedLine, renderedCol int) (int, int) {
 }
 
 // mapRawToRenderedTable maps raw table position to rendered.
-// Skips separator rows when counting rendered lines.
+//
+// Inverse of mapRenderedToRawTable. Layout offsets:
+//
+//	raw header (non-sep idx 0)  → rendered line 1
+//	raw separator               → rendered line 2 (Glamour border)
+//	raw data row (non-sep idx N, N≥1) → rendered line N+2
 func mapRawToRenderedTable(b Block, rawLine, rawCol int) (int, int) {
 	rawLines := strings.Split(b.Raw, "\n")
-	// If cursor is on a separator row, map to the previous content line
+	// Separator maps to the Glamour border line.
 	if rawLine < len(rawLines) && isTableSeparator(rawLines[rawLine]) {
-		renderedLine := 0
-		for i := 0; i < rawLine; i++ {
-			if !isTableSeparator(rawLines[i]) {
-				renderedLine++
-			}
-		}
-		if renderedLine > 0 {
-			renderedLine--
-		}
-		return renderedLine, 0
+		return 2, 0
 	}
-	// Count non-separator lines before rawLine
-	renderedLine := 0
+	// Count non-separator lines before rawLine to get this line's content index.
+	nonSepIdx := 0
 	for i := 0; i < rawLine && i < len(rawLines); i++ {
 		if !isTableSeparator(rawLines[i]) {
-			renderedLine++
+			nonSepIdx++
 		}
+	}
+	// header (nonSepIdx=0) → rendered 1
+	// data rows (nonSepIdx≥1) → rendered nonSepIdx+2
+	var renderedLine int
+	if nonSepIdx == 0 {
+		renderedLine = 1
+	} else {
+		renderedLine = nonSepIdx + 2
 	}
 	if rawLine < len(rawLines) {
 		return renderedLine, unmapTableCol(rawLines[rawLine], rawCol)

@@ -58,7 +58,7 @@ development_status:
   2-4-block-transitions-the-mode-unified-block-reveal: done
   2-5-cursor-position-mapping-between-rendered-and-raw: done
   2-6-new-block-creation-and-blank-canvas-startup: done
-  epic-2-retrospective: optional
+  epic-2-retrospective: done
 
   # Epic 3: Status Bar and Editor Feedback
   epic-3: backlog

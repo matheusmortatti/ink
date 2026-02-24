@@ -1450,12 +1450,13 @@ func TestEditorModel_ResizeDuringInsertMode(t *testing.T) {
 // TestEditorModel_CursorMapping_EnterAtRenderedPosition verifies that entering
 // insert mode maps the cursor to the correct raw position.
 func TestEditorModel_CursorMapping_EnterAtRenderedPosition(t *testing.T) {
-	// Heading: rendered shows "My Title", raw is "## My Title"
+	// H2 heading: Glamour keeps "## " visible, so rendered is "## My Title".
+	// raw is "## My Title" — the mapping is 1:1 in the full line (prefix included).
 	blocks := block.Parse([]byte("## My Title"))
 	e := NewEditor("test.md", blocks)
 	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// Move cursor to col 3 (should be on 'T' in rendered "My Title")
+	// Move cursor to col 3 (the 'M' in rendered "## My Title", after "## ").
 	for i := 0; i < 3; i++ {
 		e.Update(tea.KeyPressMsg{Code: 'l'})
 	}
@@ -1467,14 +1468,14 @@ func TestEditorModel_CursorMapping_EnterAtRenderedPosition(t *testing.T) {
 		t.Fatal("expected activeBuffer != nil")
 	}
 
-	// Gap buffer cursor should be at the mapped position
+	// Gap buffer cursor should be at the mapped position.
+	// H2 prefix "## " is kept as visible text → rendered col 3 maps 1:1 to raw col 3.
 	bufLine, bufCol := e.activeBuffer.CursorLineCol()
 	if bufLine != 0 {
 		t.Errorf("expected bufLine=0, got %d", bufLine)
 	}
-	// In "## My Title", col 3 in rendered = col 6 in raw (3 for "## " prefix + 3)
-	if bufCol != 6 {
-		t.Errorf("expected bufCol=6, got %d", bufCol)
+	if bufCol != 3 {
+		t.Errorf("expected bufCol=3, got %d", bufCol)
 	}
 
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -1490,8 +1491,8 @@ func TestEditorModel_CursorMapping_ExitReturnsToRenderedPosition(t *testing.T) {
 	// Enter insert mode at rendered col 0
 	e.Update(tea.KeyPressMsg{Code: 'i'})
 
-	// Cursor starts at raw col 3 (after "## "). Move right 3 times to raw col 6
-	// which is 'T' in "## My Title". This should map back to rendered col 3.
+	// Cursor starts at raw col 0 (rendered col 0 maps 1:1 → raw col 0 for '#').
+	// Move right 3 times to raw col 3 which is 'M' in "## My Title".
 	for i := 0; i < 3; i++ {
 		e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	}
@@ -1499,7 +1500,7 @@ func TestEditorModel_CursorMapping_ExitReturnsToRenderedPosition(t *testing.T) {
 	// Exit
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
-	// Cursor should be at rendered col 3 (the position of 'T' in rendered view)
+	// H2 1:1 mapping: raw col 3 → rendered col 3 (the 'M' in rendered "## My Title")
 	if e.CursorCol() != 3 {
 		t.Errorf("expected cursorCol=3 after exit, got %d", e.CursorCol())
 	}

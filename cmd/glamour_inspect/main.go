@@ -13,7 +13,7 @@ func main() {
 	content := []byte("# Test file\n\nThis is a test markdown file.\n\n```go\nfunc TestFile(m string) {\n  // do some stuff\n}\n```\n\n|| Column1 | Column2 | Column3 |\n| ------------- | -------------- | -------------- |\n| Item1 | Item1 | Item1 |\n||\n\nLorem ipsum dolor sit amet.")
 	blocks := block.Parse(content)
 
-	r, err := render.NewRenderer(80)
+	r, err := render.NewRenderer(80, false)
 	if err != nil {
 		fmt.Println("error:", err)
 		return

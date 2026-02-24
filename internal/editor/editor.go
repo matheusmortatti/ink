@@ -9,6 +9,7 @@ import (
 	"github.com/matheusmortatti/ink/internal/render"
 	"github.com/matheusmortatti/ink/internal/ui"
 	"github.com/matheusmortatti/ink/internal/vim"
+	"github.com/muesli/termenv"
 )
 
 // EditorModel is the single Bubbletea model. Components are fields.
@@ -32,15 +33,27 @@ type EditorModel struct {
 
 	// Syntax dimming
 	dimStyle lipgloss.Style
+
+	// hasDark is the terminal background detection result, captured once in
+	// NewEditor() before bubbletea starts managing stdin.
+	hasDark bool
 }
 
 // NewEditor creates an EditorModel with the given file path and parsed blocks.
+// Must be called before tea.NewProgram().Run(): it detects the terminal
+// background (via termenv) and locks that result into lipgloss so neither
+// glamour nor lipgloss ever queries the terminal again once bubbletea owns
+// stdin. Querying inside bubbletea's input loop causes the terminal's
+// response to arrive as garbage KeyPressMsg events.
 func NewEditor(filePath string, blocks []block.Block) *EditorModel {
+	hasDark := termenv.HasDarkBackground()
+	lipgloss.SetHasDarkBackground(hasDark)
 	return &EditorModel{
 		filePath:       filePath,
 		blocks:         blocks,
 		modeHandler:    vim.NewNormalHandler(),
 		activeBlockIdx: -1,
+		hasDark:        hasDark,
 	}
 }
 
@@ -647,7 +660,7 @@ func (e *EditorModel) initViewport() {
 		colWidth = 1
 	}
 
-	r, err := render.NewRenderer(colWidth)
+	r, err := render.NewRenderer(colWidth, e.hasDark)
 	if err != nil {
 		e.ready = true
 		e.viewport = ui.NewViewport(e.width, e.height)
@@ -659,8 +672,6 @@ func (e *EditorModel) initViewport() {
 	_ = r.PreRenderAll(e.blocks, e.cache)
 
 	e.dimStyle = render.DimStyle(render.SyntaxDimPercent)
-	// Force terminal background detection now (not lazily on first insert mode)
-	_ = e.dimStyle.Render("")
 
 	e.viewport = ui.NewViewport(e.width, e.height)
 	e.viewport.SetDimFunc(func(s string) string { return e.dimStyle.Render(s) })

@@ -8,12 +8,12 @@ import (
 )
 
 func TestNewRenderer_ValidWidth(t *testing.T) {
-	r, err := NewRenderer(80)
+	r, err := NewRenderer(80, true)
 	if err != nil {
-		t.Fatalf("NewRenderer(80) returned error: %v", err)
+		t.Fatalf("NewRenderer(80, true) returned error: %v", err)
 	}
 	if r == nil {
-		t.Fatal("NewRenderer(80) returned nil")
+		t.Fatal("NewRenderer(80, true) returned nil")
 	}
 	if r.width != 80 {
 		t.Errorf("width = %d, want 80", r.width)
@@ -21,12 +21,12 @@ func TestNewRenderer_ValidWidth(t *testing.T) {
 }
 
 func TestNewRenderer_SmallWidth(t *testing.T) {
-	r, err := NewRenderer(20)
+	r, err := NewRenderer(20, true)
 	if err != nil {
-		t.Fatalf("NewRenderer(20) returned error: %v", err)
+		t.Fatalf("NewRenderer(20, true) returned error: %v", err)
 	}
 	if r == nil {
-		t.Fatal("NewRenderer(20) returned nil")
+		t.Fatal("NewRenderer(20, true) returned nil")
 	}
 }
 
@@ -40,7 +40,7 @@ func TestNewRenderer_InvalidWidth(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewRenderer(tt.width)
+			_, err := NewRenderer(tt.width, true)
 			if err == nil {
 				t.Errorf("NewRenderer(%d) should return error", tt.width)
 			}
@@ -49,7 +49,7 @@ func TestNewRenderer_InvalidWidth(t *testing.T) {
 }
 
 func TestRenderer_AllBlockTypes_RenderCorrectly(t *testing.T) {
-	r, err := NewRenderer(80)
+	r, err := NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -88,7 +88,11 @@ func TestRenderer_AllBlockTypes_RenderCorrectly(t *testing.T) {
 			if rendered == "" {
 				t.Errorf("Render(%s) returned empty string", tt.name)
 			}
-			if tt.contains != "" && !strings.Contains(rendered, tt.contains) {
+			// Strip ANSI codes before content check: Glamour v0.10 wraps
+			// each text token in its own color escape, so plain-text
+			// substrings like "Hello world" must be checked on clean text.
+			clean := ansiRe.ReplaceAllString(rendered, "")
+			if tt.contains != "" && !strings.Contains(clean, tt.contains) {
 				t.Errorf("Render(%s) = %q, want to contain %q", tt.name, rendered, tt.contains)
 			}
 		})
@@ -99,13 +103,13 @@ func TestRenderer_DifferentWidths_DifferentOutput(t *testing.T) {
 	longText := "This is a very long paragraph that should wrap differently at different terminal widths because it contains enough text to exceed the narrow width."
 	b := block.Block{Type: block.Paragraph, Raw: longText}
 
-	r80, err := NewRenderer(80)
+	r80, err := NewRenderer(80, true)
 	if err != nil {
-		t.Fatalf("NewRenderer(80): %v", err)
+		t.Fatalf("NewRenderer(80, true): %v", err)
 	}
-	r40, err := NewRenderer(40)
+	r40, err := NewRenderer(40, true)
 	if err != nil {
-		t.Fatalf("NewRenderer(40): %v", err)
+		t.Fatalf("NewRenderer(40, true): %v", err)
 	}
 
 	out80, err := r80.Render(b)
@@ -123,7 +127,7 @@ func TestRenderer_DifferentWidths_DifferentOutput(t *testing.T) {
 }
 
 func TestRenderer_SetWidth(t *testing.T) {
-	r, err := NewRenderer(80)
+	r, err := NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -138,7 +142,7 @@ func TestRenderer_SetWidth(t *testing.T) {
 }
 
 func TestRenderer_SetWidth_ChangesOutput(t *testing.T) {
-	r, err := NewRenderer(80)
+	r, err := NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -167,7 +171,7 @@ func TestRenderer_SetWidth_ChangesOutput(t *testing.T) {
 }
 
 func TestSetWidth_InvalidWidth(t *testing.T) {
-	r, err := NewRenderer(80)
+	r, err := NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -195,7 +199,7 @@ func TestRenderer_NilGlamour_ReturnsError(t *testing.T) {
 }
 
 func TestRenderer_EmptyRaw(t *testing.T) {
-	r, err := NewRenderer(80)
+	r, err := NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -208,7 +212,7 @@ func TestRenderer_EmptyRaw(t *testing.T) {
 }
 
 func TestPreRenderAll_PopulatesCache(t *testing.T) {
-	r, err := NewRenderer(80)
+	r, err := NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -262,7 +266,7 @@ func TestPreRenderAll_ContinuesOnError(t *testing.T) {
 }
 
 func TestPreRenderAll_Empty(t *testing.T) {
-	r, err := NewRenderer(80)
+	r, err := NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -275,7 +279,7 @@ func TestPreRenderAll_Empty(t *testing.T) {
 }
 
 func TestRenderCached_Hit(t *testing.T) {
-	r, err := NewRenderer(80)
+	r, err := NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}
@@ -302,7 +306,7 @@ func TestRenderCached_Hit(t *testing.T) {
 }
 
 func TestRenderCached_Miss(t *testing.T) {
-	r, err := NewRenderer(80)
+	r, err := NewRenderer(80, true)
 	if err != nil {
 		t.Fatalf("NewRenderer: %v", err)
 	}

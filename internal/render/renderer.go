@@ -15,23 +15,32 @@ var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 // Renderer wraps Glamour for block-level markdown rendering.
 type Renderer struct {
-	glamour *glamour.TermRenderer
-	width   int
+	glamour      *glamour.TermRenderer
+	width        int
+	glamourStyle string // "dark" or "light", detected once at construction
 }
 
 // NewRenderer creates a renderer with the given terminal width.
-func NewRenderer(width int) (*Renderer, error) {
+// hasDark must be detected before bubbletea starts (e.g. in NewEditor):
+// glamour.WithAutoStyle() queries the terminal via termenv on every
+// NewTermRenderer call, and inside bubbletea's input loop those responses
+// arrive as garbage KeyPressMsg events.
+func NewRenderer(width int, hasDark bool) (*Renderer, error) {
 	if width <= 0 {
 		return nil, fmt.Errorf("width must be positive, got %d", width)
 	}
+	style := "light"
+	if hasDark {
+		style = "dark"
+	}
 	tr, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStandardStyle(style),
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {
 		return nil, err
 	}
-	return &Renderer{glamour: tr, width: width}, nil
+	return &Renderer{glamour: tr, width: width, glamourStyle: style}, nil
 }
 
 // Render converts a markdown block to ANSI-styled output via Glamour.
@@ -66,13 +75,14 @@ func (r *Renderer) RenderCached(b block.Block, cache *RenderCache) (string, erro
 
 // SetWidth updates the renderer's word wrap width.
 // Glamour renderers are immutable regarding width, so this creates
-// a new internal Glamour instance.
+// a new internal Glamour instance, reusing the already-detected style
+// so no terminal query is issued.
 func (r *Renderer) SetWidth(width int) error {
 	if width <= 0 {
 		return fmt.Errorf("width must be positive, got %d", width)
 	}
 	tr, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStandardStyle(r.glamourStyle),
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {
