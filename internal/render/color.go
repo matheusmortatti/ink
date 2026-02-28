@@ -6,7 +6,10 @@ import (
 )
 
 // SyntaxDimPercent is the default dimming percentage for syntax characters.
-const SyntaxDimPercent = 0.6
+const (
+	SyntaxDimPercent    = 0.6 // syntax chars in active block: ~40% visible
+	StatusBarDimPercent = 0.7 // status bar in insert mode: ~30% visible
+)
 
 // DimColor interpolates a foreground color toward a background color by the given
 // percentage (0.0 = full fg, 1.0 = full bg). Used for syntax dimming (~0.6),

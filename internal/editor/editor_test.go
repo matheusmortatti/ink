@@ -2014,3 +2014,194 @@ func TestBlockSplit_TypeAfterSplit(t *testing.T) {
 		t.Errorf("expected first block 'First block', got %q", e.blocks[0].Raw)
 	}
 }
+
+// ── Status bar tests ──────────────────────────────────────────────────────────
+
+func TestStatusBarRows_Values(t *testing.T) {
+	tests := []struct {
+		height int
+		want   int
+	}{
+		{4, 0},
+		{5, 1},
+		{9, 1},
+		{10, 2},
+		{40, 2},
+	}
+	for _, tc := range tests {
+		got := statusBarRows(tc.height)
+		if got != tc.want {
+			t.Errorf("statusBarRows(%d) = %d, want %d", tc.height, got, tc.want)
+		}
+	}
+}
+
+func TestEditorModel_ViewportHeight_ReducedForStatusBar(t *testing.T) {
+	blocks := block.Parse([]byte("# Hello\n\nWorld"))
+	e := NewEditor("test.md", blocks)
+
+	msg := tea.WindowSizeMsg{Width: 120, Height: 40}
+	updated, _ := e.Update(msg)
+	m := updated.(*EditorModel)
+
+	// height=40 → sbRows=2 → viewport height = 38
+	got := m.viewport.ViewportHeight()
+	if got != 38 {
+		t.Errorf("viewport height = %d, want 38 (40 - 2 status bar rows)", got)
+	}
+}
+
+func TestEditorModel_ViewportHeight_SmallTerminal_5to9Rows(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+
+	msg := tea.WindowSizeMsg{Width: 80, Height: 7}
+	updated, _ := e.Update(msg)
+	m := updated.(*EditorModel)
+
+	// height=7 → sbRows=1 → viewport height = 6
+	got := m.viewport.ViewportHeight()
+	if got != 6 {
+		t.Errorf("viewport height = %d, want 6 (7 - 1 status bar row)", got)
+	}
+}
+
+func TestEditorModel_ViewportHeight_TinyTerminal(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+
+	msg := tea.WindowSizeMsg{Width: 40, Height: 4}
+	updated, _ := e.Update(msg)
+	m := updated.(*EditorModel)
+
+	// height=4 → sbRows=0 → viewport height = 4 (no reduction)
+	got := m.viewport.ViewportHeight()
+	if got != 4 {
+		t.Errorf("viewport height = %d, want 4 (no status bar)", got)
+	}
+}
+
+func TestEditorModel_StatusBar_InitialMode_NormalMode(t *testing.T) {
+	blocks := block.Parse([]byte("Hello world"))
+	e := NewEditor("test.md", blocks)
+
+	msg := tea.WindowSizeMsg{Width: 120, Height: 40}
+	updated, _ := e.Update(msg)
+	m := updated.(*EditorModel)
+
+	if m.statusBar == nil {
+		t.Fatal("expected statusBar to be initialized")
+	}
+	if m.statusBar.ModeLabel() != "NORMAL" {
+		t.Errorf("statusBar.ModeLabel() = %q, want %q", m.statusBar.ModeLabel(), "NORMAL")
+	}
+}
+
+func TestEditorModel_StatusBar_InitialMode_BlankCanvas(t *testing.T) {
+	// nil blocks → blank canvas → auto insert mode
+	e := NewEditor("test.md", nil)
+
+	msg := tea.WindowSizeMsg{Width: 120, Height: 40}
+	updated, _ := e.Update(msg)
+	m := updated.(*EditorModel)
+
+	if m.statusBar == nil {
+		t.Fatal("expected statusBar to be initialized")
+	}
+	if m.statusBar.ModeLabel() != "INSERT" {
+		t.Errorf("blank canvas: statusBar.ModeLabel() = %q, want %q", m.statusBar.ModeLabel(), "INSERT")
+	}
+}
+
+func TestEditorModel_ComputeDocumentCounts_MultipleBlocks(t *testing.T) {
+	blocks := block.Parse([]byte("hello world\n\nfoo"))
+	e := NewEditor("test.md", blocks)
+	e.activeBlockIdx = -1
+	e.activeBuffer = nil
+
+	words, chars := e.computeDocumentCounts()
+
+	// "hello world" = 2 words, 11 chars; "foo" = 1 word, 3 chars → total 3 words, 14 chars
+	if words != 3 {
+		t.Errorf("words = %d, want 3", words)
+	}
+	if chars != 14 {
+		t.Errorf("chars = %d, want 14", chars)
+	}
+}
+
+func TestEditorModel_ComputeDocumentCounts_ActiveBufferOverrides(t *testing.T) {
+	blocks := block.Parse([]byte("old content"))
+	e := NewEditor("test.md", blocks)
+
+	// Simulate active editing block with different content in the buffer
+	e.activeBlockIdx = 0
+	e.activeBuffer = block.NewGapBuffer("new text")
+
+	words, chars := e.computeDocumentCounts()
+
+	// Should use "new text" (2 words, 8 chars), not "old content" (2 words, 11 chars)
+	if words != 2 {
+		t.Errorf("words = %d, want 2", words)
+	}
+	if chars != 8 {
+		t.Errorf("chars = %d, want 8", chars)
+	}
+}
+
+func TestEditorModel_StatusBar_UpdatesOnInsert(t *testing.T) {
+	// Start with single word "hello" (1 word, 5 chars)
+	blocks := block.Parse([]byte("hello"))
+	e := NewEditor("test.md", blocks)
+
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m := updated.(*EditorModel)
+
+	initialWords, initialChars := m.statusBar.Counts()
+
+	// Enter append mode (cursor after current char) and type more text
+	m.Update(tea.KeyPressMsg{Code: 'a'}) // 'a' appends: enters insert after cursor
+
+	// Type " world" — creates a space then "world", making 2 words
+	m.Update(tea.KeyPressMsg{Code: ' '})
+	m.Update(tea.KeyPressMsg{Code: 'w'})
+	m.Update(tea.KeyPressMsg{Code: 'o'})
+	m.Update(tea.KeyPressMsg{Code: 'r'})
+	m.Update(tea.KeyPressMsg{Code: 'l'})
+	m.Update(tea.KeyPressMsg{Code: 'd'})
+
+	// Char count must have increased by 6 (space + "world")
+	currentWords, currentChars := m.statusBar.Counts()
+	if currentChars <= initialChars {
+		t.Errorf("char count did not increase: initial=%d, current=%d", initialChars, currentChars)
+	}
+	// Word count must have increased (1 → 2)
+	if currentWords <= initialWords {
+		t.Errorf("word count did not increase: initial=%d, current=%d", initialWords, currentWords)
+	}
+}
+
+func TestEditorModel_StatusBar_ModeLabel(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("test.md", blocks)
+
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m := updated.(*EditorModel)
+
+	// Start in normal mode
+	if m.statusBar.ModeLabel() != "NORMAL" {
+		t.Errorf("initial mode: ModeLabel() = %q, want NORMAL", m.statusBar.ModeLabel())
+	}
+
+	// Enter insert mode with 'i'
+	m.Update(tea.KeyPressMsg{Code: 'i'})
+	if m.statusBar.ModeLabel() != "INSERT" {
+		t.Errorf("after 'i': ModeLabel() = %q, want INSERT", m.statusBar.ModeLabel())
+	}
+
+	// Return to normal mode with Escape
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.statusBar.ModeLabel() != "NORMAL" {
+		t.Errorf("after Esc: ModeLabel() = %q, want NORMAL", m.statusBar.ModeLabel())
+	}
+}

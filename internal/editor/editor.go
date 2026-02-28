@@ -16,6 +16,7 @@ import (
 type EditorModel struct {
 	blocks      []block.Block
 	viewport    *ui.Viewport
+	statusBar   *ui.StatusBar
 	renderer    *render.Renderer
 	cache       *render.RenderCache
 	filePath    string
@@ -84,7 +85,11 @@ func (e *EditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !e.ready {
 			e.initViewport()
 		} else {
-			_ = e.viewport.Resize(e.width, e.height)
+			sbRows := statusBarRows(e.height)
+			_ = e.viewport.Resize(e.width, e.height-sbRows)
+			if e.statusBar != nil {
+				e.statusBar.Resize(e.width)
+			}
 		}
 		e.clampCursor()
 		return e, nil
@@ -109,7 +114,22 @@ func (e *EditorModel) View() tea.View {
 		return tea.NewView("loading...")
 	}
 
-	v := tea.NewView(e.viewport.View())
+	viewContent := e.viewport.View()
+	sbRows := statusBarRows(e.height)
+	var content string
+	if sbRows > 0 && e.statusBar != nil {
+		isDimmed := e.modeHandler.Mode() == vim.Insert
+		sbLine := e.statusBar.View(isDimmed)
+		if sbRows == 2 {
+			content = viewContent + "\n\n" + sbLine
+		} else { // sbRows == 1
+			content = viewContent + "\n" + sbLine
+		}
+	} else {
+		content = viewContent
+	}
+
+	v := tea.NewView(content)
 	v.AltScreen = true
 
 	if e.activeBlockIdx >= 0 && e.activeBuffer != nil {
@@ -169,6 +189,7 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 			cursorPos := e.activeBuffer.CursorPos()
 			if cursorPos == len([]rune(content)) && strings.HasSuffix(content, "\n") {
 				e.splitActiveBlock()
+				e.refreshStatusBar()
 				return e, nil
 			}
 			e.activeBuffer.Insert('\n')
@@ -260,6 +281,7 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 		// Nothing to do
 	}
 
+	e.refreshStatusBar()
 	return e, nil
 }
 
@@ -653,6 +675,43 @@ func (e *EditorModel) clampCursorCol() {
 	}
 }
 
+// statusBarRows returns how many terminal rows the status bar occupies,
+// based on terminal height. Returns 2 (content + blank separator + status bar)
+// for 10+ rows, 1 (status bar only, no separator) for 5-9 rows, 0 (hidden) for <5 rows.
+func statusBarRows(terminalHeight int) int {
+	if terminalHeight >= 10 {
+		return 2
+	}
+	if terminalHeight >= 5 {
+		return 1
+	}
+	return 0
+}
+
+// computeDocumentCounts returns the total word and character counts across all blocks.
+// For the active editing block, it uses the live gap buffer content to reflect uncommitted edits.
+func (e *EditorModel) computeDocumentCounts() (words, chars int) {
+	for i, b := range e.blocks {
+		raw := b.Raw
+		if i == e.activeBlockIdx && e.activeBuffer != nil {
+			raw = e.activeBuffer.Content()
+		}
+		chars += len([]rune(raw))
+		words += len(strings.Fields(raw))
+	}
+	return
+}
+
+// refreshStatusBar updates the status bar with the current mode and document counts.
+// No-ops if e.statusBar is nil.
+func (e *EditorModel) refreshStatusBar() {
+	if e.statusBar == nil {
+		return
+	}
+	words, chars := e.computeDocumentCounts()
+	e.statusBar.Set(e.modeHandler.Mode().String(), words, chars)
+}
+
 // initViewport creates renderer, cache, viewport on first WindowSizeMsg.
 func (e *EditorModel) initViewport() {
 	colWidth := ui.CalculateColumnWidth(e.width)
@@ -660,10 +719,13 @@ func (e *EditorModel) initViewport() {
 		colWidth = 1
 	}
 
+	sbRows := statusBarRows(e.height)
+
 	r, err := render.NewRenderer(colWidth, e.hasDark)
 	if err != nil {
 		e.ready = true
-		e.viewport = ui.NewViewport(e.width, e.height)
+		e.viewport = ui.NewViewport(e.width, e.height-sbRows)
+		e.statusBar = ui.NewStatusBar(e.width)
 		return
 	}
 	e.renderer = r
@@ -673,9 +735,10 @@ func (e *EditorModel) initViewport() {
 
 	e.dimStyle = render.DimStyle(render.SyntaxDimPercent)
 
-	e.viewport = ui.NewViewport(e.width, e.height)
+	e.viewport = ui.NewViewport(e.width, e.height-sbRows)
 	e.viewport.SetDimFunc(func(s string) string { return e.dimStyle.Render(s) })
 	_ = e.viewport.SetContent(e.blocks, e.renderer, e.cache)
+	e.statusBar = ui.NewStatusBar(e.width)
 
 	e.ready = true
 
@@ -695,6 +758,8 @@ func (e *EditorModel) initViewport() {
 		e.modeHandler = vim.NewInsertHandler()
 		e.ensureInsertCursorVisible()
 	}
+
+	e.refreshStatusBar()
 }
 
 // isContentEmpty returns true if the document has no meaningful content.

@@ -61,8 +61,8 @@ development_status:
   epic-2-retrospective: done
 
   # Epic 3: Status Bar and Editor Feedback
-  epic-3: backlog
-  3-1-status-bar-with-mode-display-and-word-count: backlog
+  epic-3: in-progress
+  3-1-status-bar-with-mode-display-and-word-count: done
   3-2-status-bar-mode-aware-dimming: backlog
   3-3-command-input-via-status-bar: backlog
   3-4-error-display-and-save-as-prompt: backlog
