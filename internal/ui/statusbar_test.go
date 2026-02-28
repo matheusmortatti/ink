@@ -25,7 +25,10 @@ func TestStatusBar_View_InsertMode_Dimmed(t *testing.T) {
 	// Force color output so lipgloss renders ANSI codes in test environment.
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	lipgloss.SetHasDarkBackground(true)
-	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(termenv.Ascii)
+		lipgloss.SetHasDarkBackground(false)
+	})
 
 	sb := NewStatusBar(40)
 	sb.Set("INSERT", 3, 12)
@@ -49,6 +52,38 @@ func TestStatusBar_View_Centering(t *testing.T) {
 
 	if !strings.HasPrefix(got, strings.Repeat(" ", padLeft)) {
 		t.Errorf("View(false) should start with %d spaces, got %q", padLeft, got)
+	}
+}
+
+func TestStatusBar_View_VisualMode_NotDimmed(t *testing.T) {
+	sb := NewStatusBar(40)
+	sb.Set("VISUAL", 2, 10)
+	got := sb.View(false)
+
+	if !strings.Contains(got, "VISUAL · 2w · 10c") {
+		t.Errorf("View(false) = %q, want it to contain %q", got, "VISUAL · 2w · 10c")
+	}
+	if strings.Contains(got, "\x1b[") {
+		t.Errorf("View(false) should not contain ANSI codes, got %q", got)
+	}
+}
+
+func TestStatusBar_View_Dimmed_vs_Undimmed_OutputDiffers(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	lipgloss.SetHasDarkBackground(true)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(termenv.Ascii)
+		lipgloss.SetHasDarkBackground(false)
+	})
+
+	sb := NewStatusBar(40)
+	sb.Set("INSERT", 3, 12)
+
+	dimmed := sb.View(true)
+	undimmed := sb.View(false)
+
+	if dimmed == undimmed {
+		t.Errorf("View(true) and View(false) should produce different output\ndimmed:   %q\nundimmed: %q", dimmed, undimmed)
 	}
 }
 

@@ -1,12 +1,15 @@
 package editor
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/matheusmortatti/ink/internal/block"
 	"github.com/matheusmortatti/ink/internal/vim"
+	"github.com/muesli/termenv"
 )
 
 func TestNewEditor_WithBlocks(t *testing.T) {
@@ -2203,5 +2206,65 @@ func TestEditorModel_StatusBar_ModeLabel(t *testing.T) {
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.statusBar.ModeLabel() != "NORMAL" {
 		t.Errorf("after Esc: ModeLabel() = %q, want NORMAL", m.statusBar.ModeLabel())
+	}
+}
+
+func TestEditorModel_View_StatusBar_DimmedInInsert(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	lipgloss.SetHasDarkBackground(true)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(termenv.Ascii)
+		lipgloss.SetHasDarkBackground(false)
+	})
+
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("test.md", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'i'}) // enter insert mode
+	m = updated.(*EditorModel)
+
+	// Verify mode transition actually happened (integration check)
+	if m.modeHandler.Mode() != vim.Insert {
+		t.Fatalf("expected Insert mode after 'i', got %v", m.modeHandler.Mode())
+	}
+
+	isDimmed := m.modeHandler.Mode() == vim.Insert
+	statusLine := m.statusBar.View(isDimmed)
+
+	if !strings.Contains(statusLine, "\x1b[") {
+		t.Errorf("expected ANSI codes in insert-mode status bar, got %q", statusLine)
+	}
+}
+
+func TestEditorModel_View_StatusBar_FullInNormal(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	lipgloss.SetHasDarkBackground(true)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(termenv.Ascii)
+		lipgloss.SetHasDarkBackground(false)
+	})
+
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("test.md", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'i'})           // enter insert
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape}) // back to normal
+	m = updated.(*EditorModel)
+
+	// Verify mode transition actually happened (integration check)
+	if m.modeHandler.Mode() != vim.Normal {
+		t.Fatalf("expected Normal mode after Esc, got %v", m.modeHandler.Mode())
+	}
+
+	isDimmed := m.modeHandler.Mode() == vim.Insert
+	statusLine := m.statusBar.View(isDimmed)
+
+	if strings.Contains(statusLine, "\x1b[") {
+		t.Errorf("expected no ANSI codes in normal-mode status bar, got %q", statusLine)
 	}
 }
