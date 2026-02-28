@@ -61,6 +61,8 @@ func (n *NormalHandler) handleSingleKey(key string) Action {
 		return ChangeModeAction{Mode: Insert, Variant: "o"}
 	case "O", "shift+O":
 		return ChangeModeAction{Mode: Insert, Variant: "O"}
+	case ":":
+		return ChangeModeAction{Mode: Command}
 	case "ctrl+c":
 		return QuitAction{}
 	default:

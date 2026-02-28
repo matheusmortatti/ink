@@ -87,6 +87,72 @@ func TestStatusBar_View_Dimmed_vs_Undimmed_OutputDiffers(t *testing.T) {
 	}
 }
 
+func TestStatusBar_View_CommandMode_ShowsColonBuf(t *testing.T) {
+	sb := NewStatusBar(40)
+	sb.SetCommand("q")
+	got := sb.View(false)
+
+	if !strings.Contains(got, ":q") {
+		t.Errorf("View(false) = %q, want it to contain %q", got, ":q")
+	}
+}
+
+func TestStatusBar_View_CommandMode_EmptyBuf(t *testing.T) {
+	sb := NewStatusBar(40)
+	sb.SetCommand("")
+	got := sb.View(false)
+
+	if !strings.Contains(got, ":") {
+		t.Errorf("View(false) = %q, want it to contain %q", got, ":")
+	}
+	if strings.Contains(got, "NORMAL") {
+		t.Errorf("View(false) = %q, should not contain NORMAL in command mode", got)
+	}
+}
+
+func TestStatusBar_View_ErrorMsg(t *testing.T) {
+	sb := NewStatusBar(40)
+	sb.SetError("E: Not a command: xyz")
+	got := sb.View(false)
+
+	if !strings.Contains(got, "E: Not a command: xyz") {
+		t.Errorf("View(false) = %q, want it to contain %q", got, "E: Not a command: xyz")
+	}
+}
+
+func TestStatusBar_View_CommandMode_NotDimmed(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	lipgloss.SetHasDarkBackground(true)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(termenv.Ascii)
+		lipgloss.SetHasDarkBackground(false)
+	})
+
+	sb := NewStatusBar(40)
+	sb.SetCommand("q")
+
+	dimmed := sb.View(true)
+	undimmed := sb.View(false)
+
+	if dimmed != undimmed {
+		t.Errorf("Command mode View(true) and View(false) should produce identical output (no dimming)\ndimmed:   %q\nundimmed: %q", dimmed, undimmed)
+	}
+}
+
+func TestStatusBar_Set_ClearsCommandMode(t *testing.T) {
+	sb := NewStatusBar(40)
+	sb.SetCommand("q")
+	sb.Set("NORMAL", 0, 0)
+	got := sb.View(false)
+
+	if strings.Contains(got, ":q") {
+		t.Errorf("View(false) after Set() = %q, should not contain :q", got)
+	}
+	if !strings.Contains(got, "NORMAL") {
+		t.Errorf("View(false) after Set() = %q, should contain NORMAL", got)
+	}
+}
+
 func TestStatusBar_Resize(t *testing.T) {
 	sb := NewStatusBar(40)
 	sb.Set("NORMAL", 0, 0)

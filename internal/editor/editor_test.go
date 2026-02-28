@@ -2268,3 +2268,140 @@ func TestEditorModel_View_StatusBar_FullInNormal(t *testing.T) {
 		t.Errorf("expected no ANSI codes in normal-mode status bar, got %q", statusLine)
 	}
 }
+
+func TestEditor_Colon_EntersCommandMode(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("test.md", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+
+	if m.CurrentMode() != vim.Command {
+		t.Errorf("after ':', mode = %v, want Command", m.CurrentMode())
+	}
+}
+
+func TestEditor_CommandMode_EscReturnsNormal(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("test.md", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = updated.(*EditorModel)
+
+	if m.CurrentMode() != vim.Normal {
+		t.Errorf("after Esc, mode = %v, want Normal", m.CurrentMode())
+	}
+	statusLine := m.statusBar.View(false)
+	if !strings.Contains(statusLine, "NORMAL") {
+		t.Errorf("status bar after Esc = %q, want it to contain NORMAL", statusLine)
+	}
+}
+
+func TestEditor_CommandMode_TypeAndEnter_Quit(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("test.md", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q'})
+	m = updated.(*EditorModel)
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if cmd == nil {
+		t.Fatal("expected a tea.Cmd (quit) after :q<Enter>, got nil")
+	}
+	// Execute the cmd to check it's tea.Quit
+	msg := cmd()
+	if _, ok := msg.(tea.QuitMsg); !ok {
+		t.Errorf("cmd() = %T, want tea.QuitMsg", msg)
+	}
+}
+
+func TestEditor_CommandMode_UnknownCommand_ShowsError(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("test.md", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	for _, ch := range "xyz" {
+		updated, _ = m.Update(tea.KeyPressMsg{Code: rune(ch)})
+		m = updated.(*EditorModel)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(*EditorModel)
+
+	if m.CurrentMode() != vim.Normal {
+		t.Errorf("after unknown command, mode = %v, want Normal", m.CurrentMode())
+	}
+	statusLine := m.statusBar.View(false)
+	if !strings.Contains(statusLine, "E: Not a command: xyz") {
+		t.Errorf("status bar = %q, want it to contain %q", statusLine, "E: Not a command: xyz")
+	}
+}
+
+func TestEditor_CommandMode_StatusBarShowsInput(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("test.md", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q'})
+	m = updated.(*EditorModel)
+
+	statusLine := m.statusBar.View(false)
+	if !strings.Contains(statusLine, ":q") {
+		t.Errorf("status bar = %q, want it to contain %q", statusLine, ":q")
+	}
+}
+
+func TestEditor_CommandMode_EmptyCommand_ReturnsNormal(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("test.md", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(*EditorModel)
+
+	if m.CurrentMode() != vim.Normal {
+		t.Errorf("after empty command, mode = %v, want Normal", m.CurrentMode())
+	}
+	statusLine := m.statusBar.View(false)
+	if strings.Contains(statusLine, "E:") {
+		t.Errorf("empty command should not show error, got %q", statusLine)
+	}
+	if !strings.Contains(statusLine, "NORMAL") {
+		t.Errorf("status bar after empty command = %q, want it to contain NORMAL", statusLine)
+	}
+}
+
+func TestEditor_CommandMode_BackspaceOnEmptyBuf(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("test.md", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	// Backspace on empty buffer should not crash
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m = updated.(*EditorModel)
+
+	if m.CurrentMode() != vim.Command {
+		t.Errorf("after backspace on empty buf, mode = %v, want Command", m.CurrentMode())
+	}
+}

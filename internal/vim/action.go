@@ -58,6 +58,9 @@ type InsertNewlineAction struct{}
 // InsertTabAction inserts a tab/indentation at the cursor position.
 type InsertTabAction struct{}
 
+// ExecuteCommandAction signals the editor to execute the accumulated command buffer.
+type ExecuteCommandAction struct{}
+
 func (NoOpAction) actionTag()             {}
 func (MoveCursorAction) actionTag()       {}
 func (ScrollAction) actionTag()           {}
@@ -70,3 +73,4 @@ func (BackspaceAction) actionTag()        {}
 func (DeleteCharAction) actionTag()       {}
 func (InsertNewlineAction) actionTag()    {}
 func (InsertTabAction) actionTag()        {}
+func (ExecuteCommandAction) actionTag()   {}

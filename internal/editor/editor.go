@@ -32,6 +32,9 @@ type EditorModel struct {
 	activeBlockIdx int              // index of block being edited, -1 when none
 	activeBuffer   *block.GapBuffer // gap buffer for active editing block
 
+	// Command mode state
+	commandBuf string // accumulated command text (without the leading ':')
+
 	// Syntax dimming
 	dimStyle lipgloss.Style
 
@@ -132,7 +135,18 @@ func (e *EditorModel) View() tea.View {
 	v := tea.NewView(content)
 	v.AltScreen = true
 
-	if e.activeBlockIdx >= 0 && e.activeBuffer != nil {
+	if e.modeHandler.Mode() == vim.Command && statusBarRows(e.height) > 0 {
+		// Command mode: cursor appears right after ":commandBuf" in the status bar row
+		text := ":" + e.commandBuf
+		padLeft := (e.width - len([]rune(text))) / 2
+		if padLeft < 0 {
+			padLeft = 0
+		}
+		cursorCol := padLeft + len([]rune(text))
+		sbRow := e.height - 1 // status bar is always the last row (0-indexed)
+		v.Cursor = tea.NewCursor(cursorCol, sbRow)
+		v.Cursor.Shape = tea.CursorBar
+	} else if e.activeBlockIdx >= 0 && e.activeBuffer != nil {
 		// Insert mode: cursor is within the active block (accounts for line wrapping)
 		bufLine, bufCol := e.activeBuffer.CursorLineCol()
 		screenRow, screenCol := e.viewport.BufferToScreenPos(bufLine, bufCol)
@@ -158,20 +172,35 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 		return e, tea.Quit
 
 	case vim.ChangeModeAction:
-		if a.Mode == vim.Insert && e.modeHandler.Mode() == vim.Normal {
+		switch {
+		case a.Mode == vim.Insert && e.modeHandler.Mode() == vim.Normal:
 			e.enterInsertMode(a.Variant)
-		} else if a.Mode == vim.Normal && e.modeHandler.Mode() == vim.Insert {
+		case a.Mode == vim.Normal && e.modeHandler.Mode() == vim.Insert:
 			e.exitInsertMode()
+		case a.Mode == vim.Command && e.modeHandler.Mode() == vim.Normal:
+			e.enterCommandMode()
+		case a.Mode == vim.Normal && e.modeHandler.Mode() == vim.Command:
+			e.exitCommandMode()
 		}
 
+	case vim.ExecuteCommandAction:
+		return e.executeCommand()
+
 	case vim.InsertCharAction:
-		if e.activeBuffer != nil {
+		if e.modeHandler.Mode() == vim.Command {
+			e.commandBuf += string(a.Char)
+		} else if e.activeBuffer != nil {
 			e.activeBuffer.Insert(a.Char)
 			e.updateActiveBlockDisplay()
 		}
 
 	case vim.BackspaceAction:
-		if e.activeBuffer != nil {
+		if e.modeHandler.Mode() == vim.Command {
+			runes := []rune(e.commandBuf)
+			if len(runes) > 0 {
+				e.commandBuf = string(runes[:len(runes)-1])
+			}
+		} else if e.activeBuffer != nil {
 			e.activeBuffer.Backspace()
 			e.updateActiveBlockDisplay()
 		}
@@ -388,6 +417,47 @@ func (e *EditorModel) exitInsertMode() {
 	e.modeHandler = vim.NewNormalHandler()
 	e.clampCursor()
 	e.ensureCursorVisible()
+}
+
+// enterCommandMode activates command mode, clearing the command buffer.
+func (e *EditorModel) enterCommandMode() {
+	e.commandBuf = ""
+	e.modeHandler = vim.NewCommandHandler()
+}
+
+// exitCommandMode clears the command buffer and returns to normal mode.
+func (e *EditorModel) exitCommandMode() {
+	e.commandBuf = ""
+	e.modeHandler = vim.NewNormalHandler()
+}
+
+// executeCommand executes the current commandBuf and returns to normal mode.
+// Note: this returns early from applyAction, bypassing the refreshStatusBar()
+// call at the bottom. Error paths call SetError() directly — refreshStatusBar()
+// must NOT run afterward as it would overwrite the error display.
+func (e *EditorModel) executeCommand() (tea.Model, tea.Cmd) {
+	cmd := e.commandBuf
+	e.exitCommandMode()
+	switch {
+	case cmd == "q":
+		return e, tea.Quit
+	case cmd == "wq":
+		// File save deferred to Epic 4 — quit without save for now
+		return e, tea.Quit
+	case cmd == "w":
+		// File save deferred to Epic 4
+		if e.statusBar != nil {
+			e.statusBar.SetError("E: File save not yet implemented")
+		}
+	case cmd == "":
+		// Empty command — silently return to normal mode
+		e.refreshStatusBar()
+	default:
+		if e.statusBar != nil {
+			e.statusBar.SetError("E: Not a command: " + cmd)
+		}
+	}
+	return e, nil
 }
 
 // splitActiveBlock splits the current block at the double-Enter point,
@@ -703,9 +773,14 @@ func (e *EditorModel) computeDocumentCounts() (words, chars int) {
 }
 
 // refreshStatusBar updates the status bar with the current mode and document counts.
+// In command mode, shows the command buffer instead of mode/counts.
 // No-ops if e.statusBar is nil.
 func (e *EditorModel) refreshStatusBar() {
 	if e.statusBar == nil {
+		return
+	}
+	if e.modeHandler.Mode() == vim.Command {
+		e.statusBar.SetCommand(e.commandBuf)
 		return
 	}
 	words, chars := e.computeDocumentCounts()
