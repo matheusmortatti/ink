@@ -199,6 +199,29 @@ func TestNormalHandler_Quit(t *testing.T) {
 	}
 }
 
+func TestNormalHandler_ZZ_Quit(t *testing.T) {
+	h := NewNormalHandler()
+	// First Z sets pending
+	action := h.HandleKey("Z")
+	if _, ok := action.(NoOpAction); !ok {
+		t.Fatalf("first Z: expected NoOpAction, got %T", action)
+	}
+	// Second Z triggers quit
+	action = h.HandleKey("Z")
+	if _, ok := action.(QuitAction); !ok {
+		t.Fatalf("ZZ: expected QuitAction, got %T", action)
+	}
+}
+
+func TestNormalHandler_ZNonZ_FallsThrough(t *testing.T) {
+	h := NewNormalHandler()
+	h.HandleKey("Z") // sets pending
+	action := h.HandleKey("j")
+	if _, ok := action.(MoveCursorAction); !ok {
+		t.Fatalf("Z then j: expected MoveCursorAction, got %T", action)
+	}
+}
+
 func TestNormalHandler_UnknownKey_ReturnsNoOp(t *testing.T) {
 	tests := []struct {
 		name string

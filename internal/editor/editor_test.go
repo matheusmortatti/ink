@@ -1,6 +1,8 @@
 package editor
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -2403,5 +2405,418 @@ func TestEditor_CommandMode_BackspaceOnEmptyBuf(t *testing.T) {
 
 	if m.CurrentMode() != vim.Command {
 		t.Errorf("after backspace on empty buf, mode = %v, want Command", m.CurrentMode())
+	}
+}
+
+// --- Task 7: Error auto-dismiss tests ---
+
+func TestEditor_ErrorDismissMsg_ClearsError(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("test.md", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	// Trigger an unknown command to produce an error
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'x'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(*EditorModel)
+
+	// Verify error is showing
+	if !strings.Contains(m.statusBar.View(false), "E:") {
+		t.Fatal("expected error to be shown before dismiss")
+	}
+	capturedID := m.statusBar.ErrorID()
+
+	// Simulate timer firing with matching ID
+	updated, _ = m.Update(ErrorDismissMsg{ID: capturedID})
+	m = updated.(*EditorModel)
+
+	statusLine := m.statusBar.View(false)
+	if strings.Contains(statusLine, "E:") {
+		t.Errorf("error still visible after ErrorDismissMsg: %q", statusLine)
+	}
+	if !strings.Contains(statusLine, "NORMAL") {
+		t.Errorf("expected NORMAL after error dismissed, got: %q", statusLine)
+	}
+}
+
+func TestEditor_ErrorDismissMsg_StaleIgnored(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("test.md", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	// First error
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'x'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(*EditorModel)
+	staleID := m.statusBar.ErrorID()
+
+	// Second error — increments errorID
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'y'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(*EditorModel)
+
+	// Simulate stale timer from first error
+	updated, _ = m.Update(ErrorDismissMsg{ID: staleID})
+	m = updated.(*EditorModel)
+
+	// Newer error should still be visible
+	statusLine := m.statusBar.View(false)
+	if !strings.Contains(statusLine, "E:") {
+		t.Errorf("newer error should remain after stale dismiss, got: %q", statusLine)
+	}
+}
+
+// --- Task 8: Save-as prompt tests ---
+
+func TestEditor_Quit_UnsavedContent_ShowsSavePrompt(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("", blocks) // no filePath
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	// Execute :q with content and no filePath
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(*EditorModel)
+
+	if !m.savePromptActive {
+		t.Error("expected savePromptActive after :q with unsaved content")
+	}
+	if m.statusBar != nil && !m.statusBar.InSavePrompt() {
+		t.Error("expected statusBar in save prompt mode")
+	}
+	statusLine := m.statusBar.View(false)
+	if !strings.Contains(statusLine, "Save as: ") {
+		t.Errorf("expected 'Save as: ' in status bar, got: %q", statusLine)
+	}
+}
+
+func TestEditor_Quit_EmptyBuffer_QuitsDirectly(t *testing.T) {
+	e := NewEditor("", nil) // no filePath, no content
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	// Blank canvas starts in insert mode; exit to normal
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = updated.(*EditorModel)
+
+	// Execute :q — empty buffer should quit directly
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q'})
+	m = updated.(*EditorModel)
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if cmd == nil {
+		t.Fatal("expected quit cmd for empty buffer :q")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.QuitMsg); !ok {
+		t.Errorf("expected QuitMsg, got %T", msg)
+	}
+}
+
+func TestEditor_Quit_NamedFile_QuitsDirectly(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("existing.md", blocks) // has filePath
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	// Execute :q — named file should quit directly (no save prompt)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q'})
+	m = updated.(*EditorModel)
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if cmd == nil {
+		t.Fatal("expected quit cmd for named file :q")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.QuitMsg); !ok {
+		t.Errorf("expected QuitMsg for named file, got %T", msg)
+	}
+}
+
+func TestEditor_SavePrompt_EscCancels(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	// Activate save prompt via :q
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(*EditorModel)
+
+	if !m.savePromptActive {
+		t.Fatal("save prompt should be active before Esc test")
+	}
+
+	// Press Esc to cancel
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = updated.(*EditorModel)
+
+	if m.savePromptActive {
+		t.Error("savePromptActive should be false after Esc")
+	}
+	if m.statusBar != nil && m.statusBar.InSavePrompt() {
+		t.Error("statusBar save prompt should be cleared after Esc")
+	}
+	if m.CurrentMode() != vim.Normal {
+		t.Errorf("expected Normal mode after Esc, got %v", m.CurrentMode())
+	}
+	// Block content should be untouched
+	if m.blocks[0].Raw != "hello world" {
+		t.Errorf("blocks[0].Raw = %q, want %q", m.blocks[0].Raw, "hello world")
+	}
+}
+
+func TestEditor_SavePrompt_TypeAndSave(t *testing.T) {
+	dir := t.TempDir()
+	savePath := filepath.Join(dir, "saved.md")
+
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	// Activate save prompt via :q
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(*EditorModel)
+
+	// Type the save path character by character
+	for _, ch := range savePath {
+		updated, _ = m.Update(tea.KeyPressMsg{Code: ch})
+		m = updated.(*EditorModel)
+	}
+
+	// Press Enter to save
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	// Verify file was written
+	content, err := os.ReadFile(savePath)
+	if err != nil {
+		t.Fatalf("file not created after save: %v", err)
+	}
+	if !strings.Contains(string(content), "hello world") {
+		t.Errorf("saved content = %q, want it to contain 'hello world'", content)
+	}
+
+	// Verify quit cmd returned
+	if cmd == nil {
+		t.Fatal("expected quit cmd after successful save")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.QuitMsg); !ok {
+		t.Errorf("expected QuitMsg after save, got %T", msg)
+	}
+}
+
+func TestEditor_SavePrompt_InvalidPath_ShowsError(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	// Activate save prompt
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(*EditorModel)
+
+	// Type an invalid path (no .md extension)
+	for _, ch := range "badpath.txt" {
+		updated, _ = m.Update(tea.KeyPressMsg{Code: ch})
+		m = updated.(*EditorModel)
+	}
+
+	// Press Enter
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(*EditorModel)
+
+	// Error should be shown
+	statusLine := m.statusBar.View(false)
+	if !strings.Contains(statusLine, "E:") {
+		t.Errorf("expected error after invalid path, got: %q", statusLine)
+	}
+	// Save prompt should still be active
+	if !m.savePromptActive {
+		t.Error("save prompt should remain active after invalid path error")
+	}
+}
+
+func TestEditor_Write_NamedFile(t *testing.T) {
+	dir := t.TempDir()
+	savePath := filepath.Join(dir, "doc.md")
+
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor(savePath, blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	// Execute :w with an existing filePath
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'w'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(*EditorModel)
+
+	content, err := os.ReadFile(savePath)
+	if err != nil {
+		t.Fatalf("file not written by :w: %v", err)
+	}
+	if !strings.Contains(string(content), "hello world") {
+		t.Errorf("written content = %q, want 'hello world'", content)
+	}
+}
+
+func TestEditor_WriteQuit_NamedFile(t *testing.T) {
+	dir := t.TempDir()
+	savePath := filepath.Join(dir, "doc.md")
+
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor(savePath, blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	// Execute :wq with an existing filePath
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'w'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q'})
+	m = updated.(*EditorModel)
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	// Verify file written
+	content, err := os.ReadFile(savePath)
+	if err != nil {
+		t.Fatalf("file not written by :wq: %v", err)
+	}
+	if !strings.Contains(string(content), "hello world") {
+		t.Errorf("written content = %q, want 'hello world'", content)
+	}
+
+	// Verify quit
+	if cmd == nil {
+		t.Fatal("expected quit cmd after :wq")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.QuitMsg); !ok {
+		t.Errorf("expected QuitMsg after :wq, got %T", msg)
+	}
+}
+
+// --- Review fix tests ---
+
+func TestEditor_ZZ_NamedFile_QuitsDirectly(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("existing.md", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	// ZZ in normal mode should quit
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'Z', Mod: tea.ModShift})
+	m = updated.(*EditorModel)
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'Z', Mod: tea.ModShift})
+
+	if cmd == nil {
+		t.Fatal("expected quit cmd from ZZ")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.QuitMsg); !ok {
+		t.Errorf("expected QuitMsg from ZZ, got %T", msg)
+	}
+}
+
+func TestEditor_ZZ_UnsavedContent_ShowsSavePrompt(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("", blocks) // no filePath
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	// ZZ with unsaved content and no filePath should show save prompt
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'Z', Mod: tea.ModShift})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'Z', Mod: tea.ModShift})
+	m = updated.(*EditorModel)
+
+	if !m.savePromptActive {
+		t.Error("expected savePromptActive after ZZ with unsaved content")
+	}
+}
+
+func TestEditor_SavePrompt_ErrorThenRestore(t *testing.T) {
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	// Activate save prompt via :q
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ':'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(*EditorModel)
+
+	// Type an invalid path
+	for _, ch := range "bad.txt" {
+		updated, _ = m.Update(tea.KeyPressMsg{Code: ch})
+		m = updated.(*EditorModel)
+	}
+
+	// Press Enter — triggers error
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(*EditorModel)
+
+	// Error should be shown (overriding save prompt)
+	statusLine := m.statusBar.View(false)
+	if !strings.Contains(statusLine, "E:") {
+		t.Fatalf("expected error in status bar, got: %q", statusLine)
+	}
+	capturedID := m.statusBar.ErrorID()
+
+	// Save prompt should still be active underneath
+	if !m.savePromptActive {
+		t.Error("savePromptActive should remain true during error overlay")
+	}
+
+	// Simulate error auto-dismiss timer
+	updated, _ = m.Update(ErrorDismissMsg{ID: capturedID})
+	m = updated.(*EditorModel)
+
+	// Save prompt should now be visible again
+	statusLine = m.statusBar.View(false)
+	if !strings.Contains(statusLine, "Save as: ") {
+		t.Errorf("save prompt should reappear after error dismiss, got: %q", statusLine)
+	}
+	if !m.savePromptActive {
+		t.Error("savePromptActive should still be true after error dismiss")
 	}
 }

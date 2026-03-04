@@ -153,6 +153,106 @@ func TestStatusBar_Set_ClearsCommandMode(t *testing.T) {
 	}
 }
 
+// --- Task 7: Error auto-dismiss tests ---
+
+func TestStatusBar_ErrorAutoID(t *testing.T) {
+	sb := NewStatusBar(40)
+	if sb.ErrorID() != 0 {
+		t.Errorf("initial errorID = %d, want 0", sb.ErrorID())
+	}
+	sb.SetError("E: first")
+	if sb.ErrorID() != 1 {
+		t.Errorf("errorID after first SetError = %d, want 1", sb.ErrorID())
+	}
+	sb.SetError("E: second")
+	if sb.ErrorID() != 2 {
+		t.Errorf("errorID after second SetError = %d, want 2", sb.ErrorID())
+	}
+}
+
+func TestStatusBar_ClearError_MatchingID(t *testing.T) {
+	sb := NewStatusBar(40)
+	sb.SetError("E: something")
+	id := sb.ErrorID()
+
+	sb.ClearError(id)
+	got := sb.View(false)
+
+	if strings.Contains(got, "E: something") {
+		t.Errorf("error still visible after ClearError with matching ID: %q", got)
+	}
+	if !strings.Contains(got, "NORMAL") {
+		t.Errorf("expected NORMAL status after error cleared, got: %q", got)
+	}
+}
+
+func TestStatusBar_ClearError_StaleID(t *testing.T) {
+	sb := NewStatusBar(40)
+	sb.SetError("E: first")
+	staleID := sb.ErrorID()
+
+	sb.SetError("E: second") // increments errorID again
+
+	sb.ClearError(staleID) // stale — should be ignored
+	got := sb.View(false)
+
+	if !strings.Contains(got, "E: second") {
+		t.Errorf("newer error should remain after stale ClearError: %q", got)
+	}
+}
+
+// --- Task 8.1-8.3: Save-as prompt StatusBar tests ---
+
+func TestStatusBar_View_SavePrompt(t *testing.T) {
+	sb := NewStatusBar(40)
+	sb.SetSavePrompt(false)
+	got := sb.View(false)
+
+	if !strings.Contains(got, "Save as: ") {
+		t.Errorf("View() with save prompt = %q, want it to contain %q", got, "Save as: ")
+	}
+}
+
+func TestStatusBar_View_SavePrompt_WithInput(t *testing.T) {
+	sb := NewStatusBar(40)
+	sb.SetSavePrompt(false)
+	sb.AppendSavePrompt('f')
+	sb.AppendSavePrompt('i')
+	sb.AppendSavePrompt('l')
+	sb.AppendSavePrompt('e')
+	sb.AppendSavePrompt('.')
+	sb.AppendSavePrompt('m')
+	sb.AppendSavePrompt('d')
+	got := sb.View(false)
+
+	if !strings.Contains(got, "Save as: file.md") {
+		t.Errorf("View() = %q, want it to contain %q", got, "Save as: file.md")
+	}
+}
+
+func TestStatusBar_View_SavePrompt_NotDimmed(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	lipgloss.SetHasDarkBackground(true)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(termenv.Ascii)
+		lipgloss.SetHasDarkBackground(false)
+	})
+
+	sb := NewStatusBar(40)
+	sb.SetSavePrompt(false)
+
+	dimmed := sb.View(true)
+	undimmed := sb.View(false)
+
+	// Save prompt should never be dimmed
+	if dimmed != undimmed {
+		t.Errorf("save prompt View(true) and View(false) should be identical\ndimmed:   %q\nundimmed: %q", dimmed, undimmed)
+	}
+	if !strings.Contains(dimmed, "Save as: ") {
+		t.Errorf("save prompt not visible in View: %q", dimmed)
+	}
+}
+
 func TestStatusBar_Resize(t *testing.T) {
 	sb := NewStatusBar(40)
 	sb.Set("NORMAL", 0, 0)

@@ -21,6 +21,13 @@ func (n *NormalHandler) HandleKey(key string) Action {
 		// Not a valid sequence — process the second key as standalone
 		return n.handleSingleKey(key)
 	}
+	if n.pending == 'Z' {
+		n.pending = 0
+		if key == "Z" || key == "shift+Z" {
+			return QuitAction{}
+		}
+		return n.handleSingleKey(key)
+	}
 
 	return n.handleSingleKey(key)
 }
@@ -61,6 +68,9 @@ func (n *NormalHandler) handleSingleKey(key string) Action {
 		return ChangeModeAction{Mode: Insert, Variant: "o"}
 	case "O", "shift+O":
 		return ChangeModeAction{Mode: Insert, Variant: "O"}
+	case "Z", "shift+Z":
+		n.pending = 'Z'
+		return NoOpAction{}
 	case ":":
 		return ChangeModeAction{Mode: Command}
 	case "ctrl+c":

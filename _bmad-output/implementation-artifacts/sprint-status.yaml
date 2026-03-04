@@ -65,7 +65,7 @@ development_status:
   3-1-status-bar-with-mode-display-and-word-count: done
   3-2-status-bar-mode-aware-dimming: done
   3-3-command-input-via-status-bar: done
-  3-4-error-display-and-save-as-prompt: backlog
+  3-4-error-display-and-save-as-prompt: done
   epic-3-retrospective: optional
 
   # Epic 4: File Management and Auto-Save

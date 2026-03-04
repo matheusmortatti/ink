@@ -2,15 +2,23 @@ package editor
 
 import (
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/matheusmortatti/ink/internal/block"
+	"github.com/matheusmortatti/ink/internal/file"
 	"github.com/matheusmortatti/ink/internal/render"
 	"github.com/matheusmortatti/ink/internal/ui"
 	"github.com/matheusmortatti/ink/internal/vim"
 	"github.com/muesli/termenv"
 )
+
+// ErrorDismissMsg is sent by a tea.Tick timer to auto-dismiss an error message.
+// The ID must match the StatusBar's current errorID to prevent stale dismissals.
+type ErrorDismissMsg struct {
+	ID uint64
+}
 
 // EditorModel is the single Bubbletea model. Components are fields.
 type EditorModel struct {
@@ -34,6 +42,9 @@ type EditorModel struct {
 
 	// Command mode state
 	commandBuf string // accumulated command text (without the leading ':')
+
+	// Save-as prompt state
+	savePromptActive bool
 
 	// Syntax dimming
 	dimStyle lipgloss.Style
@@ -105,8 +116,19 @@ func (e *EditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !e.ready {
 			return e, nil
 		}
+		// Save-as prompt intercepts keys directly — not routed through vim mode handler
+		if e.savePromptActive {
+			return e.handleSavePromptKey(msg)
+		}
 		action := e.modeHandler.HandleKey(msg.String())
 		return e.applyAction(action)
+
+	case ErrorDismissMsg:
+		if e.statusBar != nil {
+			e.statusBar.ClearError(msg.ID)
+			e.refreshStatusBar()
+		}
+		return e, nil
 	}
 
 	return e, nil
@@ -135,7 +157,18 @@ func (e *EditorModel) View() tea.View {
 	v := tea.NewView(content)
 	v.AltScreen = true
 
-	if e.modeHandler.Mode() == vim.Command && statusBarRows(e.height) > 0 {
+	if e.savePromptActive && statusBarRows(e.height) > 0 {
+		// Save-as prompt: cursor at end of "Save as: {buf}" in the status bar row
+		text := "Save as: " + e.statusBar.SavePromptBuf()
+		padLeft := (e.width - len([]rune(text))) / 2
+		if padLeft < 0 {
+			padLeft = 0
+		}
+		cursorCol := padLeft + len([]rune(text))
+		sbRow := e.height - 1
+		v.Cursor = tea.NewCursor(cursorCol, sbRow)
+		v.Cursor.Shape = tea.CursorBar
+	} else if e.modeHandler.Mode() == vim.Command && statusBarRows(e.height) > 0 {
 		// Command mode: cursor appears right after ":commandBuf" in the status bar row
 		text := ":" + e.commandBuf
 		padLeft := (e.width - len([]rune(text))) / 2
@@ -169,6 +202,12 @@ func (e *EditorModel) View() tea.View {
 func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 	switch a := action.(type) {
 	case vim.QuitAction:
+		// Same logic as :q — prompt for save if unsaved unnamed buffer
+		if e.filePath == "" && e.hasContent() {
+			e.activateSavePrompt(true)
+			e.refreshStatusBar()
+			return e, nil
+		}
 		return e, tea.Quit
 
 	case vim.ChangeModeAction:
@@ -432,32 +471,159 @@ func (e *EditorModel) exitCommandMode() {
 }
 
 // executeCommand executes the current commandBuf and returns to normal mode.
-// Note: this returns early from applyAction, bypassing the refreshStatusBar()
-// call at the bottom. Error paths call SetError() directly — refreshStatusBar()
-// must NOT run afterward as it would overwrite the error display.
+// Error paths use setErrorWithTimer() which returns a tea.Cmd for the
+// auto-dismiss timer, bypassing refreshStatusBar() to preserve the error.
 func (e *EditorModel) executeCommand() (tea.Model, tea.Cmd) {
 	cmd := e.commandBuf
 	e.exitCommandMode()
 	switch {
 	case cmd == "q":
-		return e, tea.Quit
-	case cmd == "wq":
-		// File save deferred to Epic 4 — quit without save for now
-		return e, tea.Quit
-	case cmd == "w":
-		// File save deferred to Epic 4
-		if e.statusBar != nil {
-			e.statusBar.SetError("E: File save not yet implemented")
+		// Quit: if unsaved content with no file path, show save-as prompt
+		if e.filePath == "" && e.hasContent() {
+			e.activateSavePrompt(true)
+			return e, nil
 		}
+		return e, tea.Quit
+
+	case cmd == "wq":
+		// Write + quit
+		if e.filePath != "" {
+			if err := file.WriteFile(e.filePath, e.serializeDocument()); err != nil {
+				return e, e.setErrorWithTimer("E: " + err.Error())
+			}
+			return e, tea.Quit
+		}
+		// No file path — prompt for save-as then quit
+		e.activateSavePrompt(true)
+		return e, nil
+
+	case cmd == "w":
+		// Write only
+		if e.filePath != "" {
+			if err := file.WriteFile(e.filePath, e.serializeDocument()); err != nil {
+				return e, e.setErrorWithTimer("E: " + err.Error())
+			}
+			e.refreshStatusBar()
+			return e, nil
+		}
+		// No file path — prompt for save-as
+		e.activateSavePrompt(false)
+		return e, nil
+
 	case cmd == "":
 		// Empty command — silently return to normal mode
 		e.refreshStatusBar()
+
 	default:
 		if e.statusBar != nil {
-			e.statusBar.SetError("E: Not a command: " + cmd)
+			return e, e.setErrorWithTimer("E: Not a command: " + cmd)
 		}
 	}
 	return e, nil
+}
+
+// setErrorWithTimer displays an error in the status bar and returns a tea.Cmd
+// that auto-dismisses it after 3 seconds.
+func (e *EditorModel) setErrorWithTimer(msg string) tea.Cmd {
+	if e.statusBar == nil {
+		return nil
+	}
+	e.statusBar.SetError(msg)
+	id := e.statusBar.ErrorID()
+	return tea.Tick(3*time.Second, func(_ time.Time) tea.Msg {
+		return ErrorDismissMsg{ID: id}
+	})
+}
+
+// activateSavePrompt activates the save-as prompt in the status bar.
+// When quitAfter is true, a successful save exits the editor.
+func (e *EditorModel) activateSavePrompt(quitAfter bool) {
+	e.savePromptActive = true
+	if e.statusBar != nil {
+		e.statusBar.SetSavePrompt(quitAfter)
+	}
+}
+
+// cancelSavePrompt deactivates the save-as prompt and returns to normal mode.
+func (e *EditorModel) cancelSavePrompt() {
+	e.savePromptActive = false
+	if e.statusBar != nil {
+		e.statusBar.ClearSavePrompt()
+	}
+	e.refreshStatusBar()
+}
+
+// handleSavePromptKey processes keyboard input while the save-as prompt is active.
+func (e *EditorModel) handleSavePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.Code == tea.KeyEscape:
+		e.cancelSavePrompt()
+		return e, nil
+
+	case msg.Code == tea.KeyEnter:
+		return e.attemptSaveAs()
+
+	case msg.Code == tea.KeyBackspace:
+		if e.statusBar != nil {
+			e.statusBar.BackspaceSavePrompt()
+		}
+		return e, nil
+
+	default:
+		// Printable characters — ignore while error overlay is covering the prompt
+		if msg.Code >= 32 && msg.Code != tea.KeyDelete {
+			if e.statusBar != nil && !e.statusBar.HasError() {
+				e.statusBar.AppendSavePrompt(rune(msg.Code))
+			}
+		}
+		return e, nil
+	}
+}
+
+// attemptSaveAs validates the path and writes the document.
+func (e *EditorModel) attemptSaveAs() (tea.Model, tea.Cmd) {
+	if e.statusBar == nil {
+		return e, nil
+	}
+	path := e.statusBar.SavePromptBuf()
+	quitAfter := e.statusBar.SavePromptQuitAfter()
+
+	if err := file.ValidatePath(path); err != nil {
+		return e, e.setErrorWithTimer("E: Invalid path: " + path)
+	}
+
+	if err := file.WriteFile(path, e.serializeDocument()); err != nil {
+		return e, e.setErrorWithTimer("E: " + err.Error())
+	}
+
+	// Success: update file path, clear prompt
+	e.filePath = path
+	e.cancelSavePrompt()
+
+	if quitAfter {
+		return e, tea.Quit
+	}
+	return e, nil
+}
+
+// serializeDocument joins all block raw content with double-newline separators
+// and appends a trailing newline (POSIX convention).
+func (e *EditorModel) serializeDocument() []byte {
+	parts := make([]string, 0, len(e.blocks))
+	for _, b := range e.blocks {
+		parts = append(parts, b.Raw)
+	}
+	return []byte(strings.Join(parts, "\n\n") + "\n")
+}
+
+// hasContent reports whether any block contains non-empty raw content.
+func (e *EditorModel) hasContent() bool {
+	for _, b := range e.blocks {
+		if b.Raw != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // splitActiveBlock splits the current block at the double-Enter point,
@@ -774,9 +940,13 @@ func (e *EditorModel) computeDocumentCounts() (words, chars int) {
 
 // refreshStatusBar updates the status bar with the current mode and document counts.
 // In command mode, shows the command buffer instead of mode/counts.
+// When the save-as prompt is active, skips the update (save prompt manages its own display).
 // No-ops if e.statusBar is nil.
 func (e *EditorModel) refreshStatusBar() {
 	if e.statusBar == nil {
+		return
+	}
+	if e.savePromptActive {
 		return
 	}
 	if e.modeHandler.Mode() == vim.Command {

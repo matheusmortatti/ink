@@ -78,18 +78,28 @@ func (v *Viewport) Resize(width, height int) error {
 }
 
 // View returns the visible portion of the content as a string.
+// Always returns exactly TerminalHeight lines (padded with blank lines when
+// content is shorter) so the status bar is always anchored to the bottom.
 func (v *Viewport) View() string {
-	if v.totalLines == 0 {
+	h := v.layout.TerminalHeight
+	if h <= 0 {
 		return ""
 	}
-	end := v.scrollOffset + v.layout.TerminalHeight
-	if end > v.totalLines {
-		end = v.totalLines
+
+	var visible []string
+	if v.totalLines > 0 && v.scrollOffset < v.totalLines {
+		end := v.scrollOffset + h
+		if end > v.totalLines {
+			end = v.totalLines
+		}
+		visible = v.lines[v.scrollOffset:end]
 	}
-	if v.scrollOffset >= v.totalLines {
-		return ""
+
+	// Pad with empty lines to fill the full viewport height.
+	for len(visible) < h {
+		visible = append(visible, "")
 	}
-	visible := v.lines[v.scrollOffset:end]
+
 	return strings.Join(visible, "\n")
 }
 

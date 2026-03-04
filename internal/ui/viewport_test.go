@@ -325,9 +325,16 @@ func TestViewport_EmptyDocument(t *testing.T) {
 		t.Errorf("ContentHeight for empty document = %d, want 0", vp.ContentHeight())
 	}
 
+	// View pads to TerminalHeight so the status bar stays anchored at the bottom.
 	view := vp.View()
-	if view != "" {
-		t.Errorf("View for empty document = %q, want empty string", view)
+	lines := strings.Split(view, "\n")
+	if len(lines) != 40 {
+		t.Errorf("View for empty document: got %d lines, want 40 (TerminalHeight)", len(lines))
+	}
+	for i, l := range lines {
+		if l != "" {
+			t.Errorf("View line %d = %q, want empty", i, l)
+		}
 	}
 }
 
