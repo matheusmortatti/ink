@@ -3072,3 +3072,116 @@ func BenchmarkAutoSave_LargeDocument(b *testing.B) {
 		m.Update(AutoSaveMsg{ID: uint64(i + 1)})
 	}
 }
+
+// --- :w <path> tests (Story 4.2) ---
+
+func TestEditor_WriteToPath_ValidMD(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "out.md")
+
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	m.commandBuf = "w " + targetPath
+	result, _ := m.executeCommand()
+	m = result.(*EditorModel)
+
+	content, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("file not written: %v", err)
+	}
+	if !strings.Contains(string(content), "hello world") {
+		t.Errorf("saved content wrong, got: %q", content)
+	}
+}
+
+func TestEditor_WriteToPath_NonMD_ShowsError(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	m.commandBuf = "w foo.txt"
+	result, _ := m.executeCommand()
+	m = result.(*EditorModel)
+
+	if m.statusBar == nil {
+		t.Fatal("expected status bar to be set after error")
+	}
+	if !m.statusBar.HasError() {
+		t.Fatal("expected status bar to have an error")
+	}
+	view := m.statusBar.View(false)
+	if !strings.Contains(view, "E: Only .md files supported") {
+		t.Errorf("expected error message in status bar view, got: %q", view)
+	}
+}
+
+func TestEditor_WriteToPath_UpdatesFilePath(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	dir := t.TempDir()
+	newPath := filepath.Join(dir, "new.md")
+
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	m.commandBuf = "w " + newPath
+	result, _ := m.executeCommand()
+	m = result.(*EditorModel)
+
+	if m.filePath != newPath {
+		t.Errorf("filePath = %q, want %q", m.filePath, newPath)
+	}
+}
+
+func TestEditor_WriteToPath_EmptyPath_ShowsError(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	m.commandBuf = "w   "
+	result, _ := m.executeCommand()
+	m = result.(*EditorModel)
+
+	if m.statusBar == nil {
+		t.Fatal("expected status bar to be set after error")
+	}
+	if !m.statusBar.HasError() {
+		t.Fatal("expected status bar to have an error")
+	}
+	view := m.statusBar.View(false)
+	if !strings.Contains(view, "E: No path specified") {
+		t.Errorf("expected 'E: No path specified' in status bar view, got: %q", view)
+	}
+}
+
+func TestEditor_WriteToPath_InvalidDir_ShowsError(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	blocks := block.Parse([]byte("hello world"))
+	e := NewEditor("", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m := updated.(*EditorModel)
+
+	m.commandBuf = "w /nonexistent/dir/file.md"
+	result, _ := m.executeCommand()
+	m = result.(*EditorModel)
+
+	if m.statusBar == nil {
+		t.Fatal("expected status bar to be set after error")
+	}
+	if !m.statusBar.HasError() {
+		t.Fatal("expected status bar to have an error")
+	}
+	view := m.statusBar.View(false)
+	if !strings.Contains(view, "E: ") {
+		t.Errorf("expected error message starting with 'E: ' in status bar view, got: %q", view)
+	}
+}

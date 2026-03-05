@@ -528,6 +528,22 @@ func (e *EditorModel) executeCommand() (tea.Model, tea.Cmd) {
 		e.activateSavePrompt(true)
 		return e, nil
 
+	case strings.HasPrefix(cmd, "w "):
+		// Write to specific path: :w <path>
+		path := strings.TrimSpace(cmd[2:])
+		if path == "" {
+			return e, e.setErrorWithTimer("E: No path specified")
+		}
+		if err := file.ValidatePath(path); err != nil {
+			return e, e.setErrorWithTimer("E: Only .md files supported")
+		}
+		if err := file.WriteFile(path, e.serializeDocument()); err != nil {
+			return e, e.setErrorWithTimer("E: " + err.Error())
+		}
+		e.filePath = path
+		e.refreshStatusBar()
+		return e, nil
+
 	case cmd == "w":
 		// Write only
 		if e.filePath != "" {
