@@ -2820,3 +2820,255 @@ func TestEditor_SavePrompt_ErrorThenRestore(t *testing.T) {
 		t.Error("savePromptActive should still be true after error dismiss")
 	}
 }
+
+func TestEditor_AutoSave_NamedFile_Fires(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.md")
+	// Do NOT create the file — auto-save should create it
+
+	blocks := []block.Block{{Type: block.Paragraph, Raw: "hello"}}
+	e := NewEditor(path, blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m := updated.(*EditorModel)
+
+	// Enter insert mode and type a character
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'i'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'x'})
+	m = updated.(*EditorModel)
+	savedID := m.autoSaveID
+
+	// Fire the matching auto-save timer
+	updated, _ = m.Update(AutoSaveMsg{ID: savedID})
+	m = updated.(*EditorModel)
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("auto-save did not write file: %v", err)
+	}
+	if !strings.Contains(string(content), "x") {
+		t.Errorf("auto-save did not write typed content, got: %q", string(content))
+	}
+}
+
+func TestEditor_AutoSave_UnnamedBuffer_NoSave(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	dir := t.TempDir()
+	ghostPath := filepath.Join(dir, "should-not-exist.md")
+
+	// Editor without a file path — unnamed buffer
+	blocks := []block.Block{{Type: block.Paragraph, Raw: "hello"}}
+	e := NewEditor("", blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m := updated.(*EditorModel)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'i'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'x'})
+	m = updated.(*EditorModel)
+
+	// Fire auto-save with matching ID — but filePath is "" so nothing should be written
+	updated, cmd := m.Update(AutoSaveMsg{ID: m.autoSaveID})
+	m = updated.(*EditorModel)
+
+	if cmd != nil {
+		t.Error("expected nil cmd for unnamed buffer auto-save")
+	}
+	if _, err := os.Stat(ghostPath); err == nil {
+		t.Error("auto-save wrote a file for unnamed buffer, but should not have")
+	}
+}
+
+func TestEditor_AutoSave_StaleTimer_Ignored(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.md")
+
+	blocks := []block.Block{{Type: block.Paragraph, Raw: "hello"}}
+	e := NewEditor(path, blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m := updated.(*EditorModel)
+
+	// Enter insert mode and type two characters — autoSaveID increments to 2
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'i'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'x'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'y'})
+	m = updated.(*EditorModel)
+
+	if m.autoSaveID != 2 {
+		t.Fatalf("expected autoSaveID == 2, got %d", m.autoSaveID)
+	}
+
+	// Send stale timer (ID 1, current is 2)
+	updated, cmd := m.Update(AutoSaveMsg{ID: 1})
+	m = updated.(*EditorModel)
+
+	if cmd != nil {
+		t.Error("expected nil cmd for stale auto-save timer")
+	}
+	// File should not have been written
+	if _, err := os.Stat(path); err == nil {
+		t.Error("stale auto-save timer wrote a file, but should not have")
+	}
+}
+
+func TestEditor_AutoSave_WriteError_ShowsError(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	dir := t.TempDir()
+	roPath := filepath.Join(dir, "test.md")
+
+	blocks := []block.Block{{Type: block.Paragraph, Raw: "hello"}}
+	e := NewEditor(roPath, blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m := updated.(*EditorModel)
+
+	// Enter insert mode and type a character to get a real autoSaveID
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'i'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'x'})
+	m = updated.(*EditorModel)
+	savedID := m.autoSaveID
+
+	// Now make the directory read-only so WriteFile fails
+	if err := os.Chmod(dir, 0444); err != nil {
+		t.Skipf("cannot make dir read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0755) })
+
+	// Fire auto-save with matching ID — should fail to write
+	updated, _ = m.Update(AutoSaveMsg{ID: savedID})
+	m = updated.(*EditorModel)
+
+	if m.statusBar == nil {
+		t.Fatal("statusBar is nil")
+	}
+	statusLine := m.statusBar.View(false)
+	if !strings.Contains(statusLine, "E: Cannot save:") {
+		t.Errorf("expected 'E: Cannot save:' in status bar, got: %q", statusLine)
+	}
+}
+
+func TestEditor_AutoSave_IDIncrementsOnEachKeystroke(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+
+	// Use empty blocks so initViewport auto-enters insert mode
+	e := NewEditor("test.md", nil)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m := updated.(*EditorModel)
+
+	// Should be in insert mode already (isContentEmpty → auto insert mode)
+	if m.activeBuffer == nil {
+		t.Fatal("expected activeBuffer != nil after init with empty content")
+	}
+
+	// Type 3 characters
+	for _, ch := range []rune{'a', 'b', 'c'} {
+		updated, _ = m.Update(tea.KeyPressMsg{Code: ch})
+		m = updated.(*EditorModel)
+	}
+
+	if m.autoSaveID != 3 {
+		t.Errorf("expected autoSaveID == 3 after 3 keystrokes, got %d", m.autoSaveID)
+	}
+}
+
+func TestEditor_ApplyAction_InsertChar_ReturnsAutoSaveCmd(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+
+	// Empty content → auto insert mode on init
+	e := NewEditor("test.md", nil)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m := updated.(*EditorModel)
+
+	if m.activeBuffer == nil {
+		t.Fatal("expected activeBuffer != nil after init with empty content")
+	}
+
+	_, cmd := m.applyAction(vim.InsertCharAction{Char: 'x'})
+	if cmd == nil {
+		t.Error("expected non-nil cmd (auto-save timer) from InsertCharAction with active buffer")
+	}
+}
+
+func TestEditor_ApplyAction_AllInsertActions_ReturnAutoSaveCmd(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+
+	setup := func(t *testing.T) *EditorModel {
+		t.Helper()
+		e := NewEditor("test.md", nil)
+		updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+		m := updated.(*EditorModel)
+		if m.activeBuffer == nil {
+			t.Fatal("expected activeBuffer != nil after init with empty content")
+		}
+		// Type a character so buffer has content for backspace/delete/newline
+		m.applyAction(vim.InsertCharAction{Char: 'a'})
+		return m
+	}
+
+	t.Run("BackspaceAction", func(t *testing.T) {
+		m := setup(t)
+		_, cmd := m.applyAction(vim.BackspaceAction{})
+		if cmd == nil {
+			t.Error("expected non-nil cmd from BackspaceAction with active buffer")
+		}
+	})
+
+	t.Run("DeleteCharAction", func(t *testing.T) {
+		m := setup(t)
+		m.activeBuffer.SetCursorLineCol(0, 0) // move cursor to start so delete has a char ahead
+		_, cmd := m.applyAction(vim.DeleteCharAction{})
+		if cmd == nil {
+			t.Error("expected non-nil cmd from DeleteCharAction with active buffer")
+		}
+	})
+
+	t.Run("InsertNewlineAction", func(t *testing.T) {
+		m := setup(t)
+		_, cmd := m.applyAction(vim.InsertNewlineAction{})
+		if cmd == nil {
+			t.Error("expected non-nil cmd from InsertNewlineAction with active buffer")
+		}
+	})
+
+	t.Run("InsertTabAction", func(t *testing.T) {
+		m := setup(t)
+		_, cmd := m.applyAction(vim.InsertTabAction{})
+		if cmd == nil {
+			t.Error("expected non-nil cmd from InsertTabAction with active buffer")
+		}
+	})
+}
+
+func BenchmarkAutoSave_LargeDocument(b *testing.B) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	dir := b.TempDir()
+	path := filepath.Join(dir, "large.md")
+
+	// Build a 10,000+ word document across multiple paragraph blocks
+	var blocks []block.Block
+	paragraph := strings.Repeat("Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua ", 20)
+	for i := 0; i < 50; i++ {
+		blocks = append(blocks, block.Block{Type: block.Paragraph, Raw: paragraph})
+	}
+
+	e := NewEditor(path, blocks)
+	updated, _ := e.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m := updated.(*EditorModel)
+
+	// Enter insert mode and type so autoSaveID > 0
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'i'})
+	m = updated.(*EditorModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'x'})
+	m = updated.(*EditorModel)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// Simulate what AutoSaveMsg handler does: send matching AutoSaveMsg
+		m.autoSaveID = uint64(i + 1)
+		m.Update(AutoSaveMsg{ID: uint64(i + 1)})
+	}
+}

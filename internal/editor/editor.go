@@ -20,6 +20,15 @@ type ErrorDismissMsg struct {
 	ID uint64
 }
 
+// AutoSaveMsg is sent by a tea.Tick timer to trigger auto-save.
+// The ID prevents stale timer triggers when the timer was reset by a later keystroke.
+type AutoSaveMsg struct {
+	ID uint64
+}
+
+// autoSaveDelay is the debounce duration for auto-save after the last keystroke.
+const autoSaveDelay = 1 * time.Second
+
 // EditorModel is the single Bubbletea model. Components are fields.
 type EditorModel struct {
 	blocks      []block.Block
@@ -42,6 +51,9 @@ type EditorModel struct {
 
 	// Command mode state
 	commandBuf string // accumulated command text (without the leading ':')
+
+	// Auto-save state
+	autoSaveID uint64
 
 	// Save-as prompt state
 	savePromptActive bool
@@ -129,6 +141,18 @@ func (e *EditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			e.refreshStatusBar()
 		}
 		return e, nil
+
+	case AutoSaveMsg:
+		if msg.ID != e.autoSaveID {
+			return e, nil // stale timer — a later keystroke already reset it
+		}
+		if e.filePath == "" {
+			return e, nil // unnamed buffer — auto-save only works on named files
+		}
+		if err := file.WriteFile(e.filePath, e.serializeDocument()); err != nil {
+			return e, e.setErrorWithTimer("E: Cannot save: " + err.Error())
+		}
+		return e, nil
 	}
 
 	return e, nil
@@ -200,6 +224,8 @@ func (e *EditorModel) View() tea.View {
 }
 
 func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
+	var autoSaveCmd tea.Cmd
+
 	switch a := action.(type) {
 	case vim.QuitAction:
 		// Same logic as :q — prompt for save if unsaved unnamed buffer
@@ -231,6 +257,7 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 		} else if e.activeBuffer != nil {
 			e.activeBuffer.Insert(a.Char)
 			e.updateActiveBlockDisplay()
+			autoSaveCmd = e.startAutoSaveTimer()
 		}
 
 	case vim.BackspaceAction:
@@ -242,12 +269,14 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 		} else if e.activeBuffer != nil {
 			e.activeBuffer.Backspace()
 			e.updateActiveBlockDisplay()
+			autoSaveCmd = e.startAutoSaveTimer()
 		}
 
 	case vim.DeleteCharAction:
 		if e.activeBuffer != nil {
 			e.activeBuffer.Delete()
 			e.updateActiveBlockDisplay()
+			autoSaveCmd = e.startAutoSaveTimer()
 		}
 
 	case vim.InsertNewlineAction:
@@ -258,16 +287,18 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 			if cursorPos == len([]rune(content)) && strings.HasSuffix(content, "\n") {
 				e.splitActiveBlock()
 				e.refreshStatusBar()
-				return e, nil
+				return e, e.startAutoSaveTimer()
 			}
 			e.activeBuffer.Insert('\n')
 			e.updateActiveBlockDisplay()
+			autoSaveCmd = e.startAutoSaveTimer()
 		}
 
 	case vim.InsertTabAction:
 		if e.activeBuffer != nil {
 			e.activeBuffer.Insert('\t')
 			e.updateActiveBlockDisplay()
+			autoSaveCmd = e.startAutoSaveTimer()
 		}
 
 	case vim.MoveCursorAction:
@@ -350,7 +381,7 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 	}
 
 	e.refreshStatusBar()
-	return e, nil
+	return e, autoSaveCmd
 }
 
 // blockIndexForLine maps a document cursor line to the block index it falls within.
@@ -522,6 +553,16 @@ func (e *EditorModel) executeCommand() (tea.Model, tea.Cmd) {
 	return e, nil
 }
 
+// startAutoSaveTimer resets the debounce timer and returns the timer tea.Cmd.
+// Each call increments autoSaveID, invalidating any pending stale timers.
+func (e *EditorModel) startAutoSaveTimer() tea.Cmd {
+	e.autoSaveID++
+	id := e.autoSaveID
+	return tea.Tick(autoSaveDelay, func(_ time.Time) tea.Msg {
+		return AutoSaveMsg{ID: id}
+	})
+}
+
 // setErrorWithTimer displays an error in the status bar and returns a tea.Cmd
 // that auto-dismisses it after 3 seconds.
 func (e *EditorModel) setErrorWithTimer(msg string) tea.Cmd {
@@ -610,8 +651,12 @@ func (e *EditorModel) attemptSaveAs() (tea.Model, tea.Cmd) {
 // and appends a trailing newline (POSIX convention).
 func (e *EditorModel) serializeDocument() []byte {
 	parts := make([]string, 0, len(e.blocks))
-	for _, b := range e.blocks {
-		parts = append(parts, b.Raw)
+	for i, b := range e.blocks {
+		raw := b.Raw
+		if i == e.activeBlockIdx && e.activeBuffer != nil {
+			raw = e.activeBuffer.Content()
+		}
+		parts = append(parts, raw)
 	}
 	return []byte(strings.Join(parts, "\n\n") + "\n")
 }
