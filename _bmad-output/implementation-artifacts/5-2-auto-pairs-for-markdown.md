@@ -30,19 +30,20 @@ so that I can format my text efficiently without manually closing each pair.
 
 - [ ] Task 2: Implement auto-pair logic helper in editor (`internal/editor/editor.go`) (AC: #1–#6)
   - [ ] 2.1 Add package-level helper `autoPairClosing(char rune, buf *block.GapBuffer) (closing string, ok bool)`:
-    - `` ` `` → `"`"` (single backtick)
-    - `[` → `"]"`
-    - `(` → `")"`
-    - `*` when the char immediately before cursor is `*` → `"**"`
-    - `_` when the char immediately before cursor is `_` → `"__"`
+    - `` ` `` → `"`"` (single backtick, always)
+    - `[` → `"]"` (always)
+    - `(` → `")"` (always)
+    - `*` → `"**"` ONLY if `buf.CursorPos() >= 2` AND `[]rune(buf.Content())[buf.CursorPos()-2] == '*'` (i.e., the char before the one just inserted is also `*`). **Guard `pos >= 2` is mandatory** — `pos-2` underflows if omitted.
+    - `_` → `"__"` ONLY under the same `pos >= 2` + preceding-char guard as `*`
     - All other chars → `"", false`
-    - "Char immediately before cursor" is determined by reading `Content()[:CursorPos()]` and checking the last rune
   - [ ] 2.2 Add package-level helper `isAutoClosingChar(char rune) bool` — returns true for: `*`, `_`, `` ` ``, `]`, `)`
     - Used for skip-over detection
-  - [ ] 2.3 Modify `InsertCharAction` handler in `applyAction()`:
-    - **Skip-over check** (BEFORE inserting): if `isAutoClosingChar(a.Char)` AND `PeekRight()` returns the same rune → call `e.activeBuffer.MoveRight()` and return early (no insert, no undo record)
-    - **Insert** the character as before (with undo recording)
-    - **Auto-pair check** (AFTER inserting): call `autoPairClosing(a.Char, e.activeBuffer)` — if it returns a closing string, insert each rune of closing string then move cursor left by `len([]rune(closing))` positions
+  - [ ] 2.3 Modify `InsertCharAction` handler in `applyAction()` — the full handler is at lines 327–336 inside `else if e.activeBuffer != nil { ... }`. Restructure the body as follows:
+    - **Skip-over check** (FIRST, before undo record or insert): if `isAutoClosingChar(a.Char)` AND `e.activeBuffer.PeekRight()` returns the same rune → call `e.activeBuffer.MoveRight()`, then `e.updateActiveBlockDisplay()`, then `break` (exits the switch case — do NOT call `startAutoSaveTimer()` since content is unchanged)
+    - **Record undo** (as before, line 332 pattern)
+    - **Insert** `a.Char` (as before)
+    - **Auto-pair check** (AFTER inserting): call `autoPairClosing(a.Char, e.activeBuffer)` — if it returns a closing string, insert each rune of that string, then call `e.activeBuffer.MoveLeft()` once per rune in closing
+    - **`e.updateActiveBlockDisplay()`** + **`autoSaveCmd = e.startAutoSaveTimer()`** as the final two lines (unchanged from current pattern)
 
 - [ ] Task 3: Write editor integration tests (`internal/editor/editor_test.go`) (AC: #1–#6)
   - [ ] 3.1 `TestEditor_AutoPair_Backtick_InsertsClosingAndPositionsCursor`
@@ -93,14 +94,37 @@ Type `*` again → next char is `*` → MoveRight → ****|
 
 Skip-over chars: `*`, `_`, `` ` ``, `]`, `)`
 
-**Implementation order in `InsertCharAction` handler:**
-1. Check skip-over FIRST (before inserting). If triggered: `MoveRight()`, do NOT record undo, break.
-2. Record undo (as before).
-3. Insert `a.Char`.
-4. Check auto-pair. If triggered: insert closing chars, move cursor left.
-5. `updateActiveBlockDisplay()` + `startAutoSaveTimer()`.
+**Implementation order in `InsertCharAction` handler** (inside `else if e.activeBuffer != nil`):
 
-The skip-over check must come before undo recording and insertion to avoid corrupt buffer state.
+```go
+// 1. Skip-over (BEFORE undo record or insert)
+if isAutoClosingChar(a.Char) {
+    if next, ok := e.activeBuffer.PeekRight(); ok && next == a.Char {
+        e.activeBuffer.MoveRight()
+        e.updateActiveBlockDisplay()
+        break  // break the switch case — no autoSave (content unchanged)
+    }
+}
+// 2. Normal undo record
+curLine, curCol := e.activeBuffer.CursorLineCol()
+e.undoManager.Record(e.activeBuffer.Content(), e.activeBuffer.CursorPos(), curLine, curCol, "insert")
+// 3. Insert typed char
+e.activeBuffer.Insert(a.Char)
+// 4. Auto-pair closing
+if closing, ok := autoPairClosing(a.Char, e.activeBuffer); ok {
+    for _, r := range closing {
+        e.activeBuffer.Insert(r)
+    }
+    for range []rune(closing) {
+        e.activeBuffer.MoveLeft()
+    }
+}
+// 5. Update display + autosave (unchanged from current pattern)
+e.updateActiveBlockDisplay()
+autoSaveCmd = e.startAutoSaveTimer()
+```
+
+**Why `break` not `return`:** `applyAction` returns `(tea.Model, tea.Cmd)`. Inside a `switch case`, `break` exits the case and falls through to the final `return e, autoSaveCmd` at the end of the function. Do NOT use bare `return` — it would require providing the return values inline.
 
 ### GapBuffer: PeekRight Addition
 
@@ -134,6 +158,10 @@ if pos >= 2 && runes[pos-1] == '*' && runes[pos-2] == '*' {
 ```
 No new gap buffer method needed — `Content()` and `CursorPos()` are already available.
 
+### Backspace Behavior: No Paired Deletion
+
+This story does NOT implement paired deletion on Backspace (e.g., pressing Backspace inside `[|]` deletes only `[`, leaving `]` behind). The `BackspaceAction` handler is unchanged. Do not add any paired-deletion logic — that is explicitly out of scope.
+
 ### No New Package Dependencies
 
 This feature requires zero new Go packages. Everything uses:
@@ -146,7 +174,12 @@ This feature requires zero new Go packages. Everything uses:
 - **Two-stage Esc flow**: The editor uses `blockPendingCommit` for pending block commit. The `InsertCharAction` handler only runs while `modeHandler.Mode() == vim.Insert` (activeBuffer is set). Auto-pair changes don't interact with the pending-commit state at all — they only fire during active insert mode.
 - **Undo recording hook**: `e.undoManager.Record(...)` is called BEFORE each mutation. For auto-pair, record undo ONCE before the first char insert. The subsequent closing char insertions + cursor moves are part of the same "atomic" auto-pair operation and should NOT be recorded separately. This gives correct undo behavior: pressing `u` after auto-pair undoes the entire pair insertion at once.
 - **`updateActiveBlockDisplay()` call**: Always call once at the end of the `InsertCharAction` handler after all buffer mutations — do not call multiple times.
-- **Test infrastructure**: Editor tests use `setupEditorWithText(t, content)` or `NewEditor()` style helpers — check `internal/editor/editor_test.go` for existing test setup patterns before writing new tests.
+- **Test infrastructure**: There is NO `setupEditorWithText()` or other helper. All editor tests use this exact pattern directly:
+  ```go
+  blocks := block.Parse([]byte("some markdown content"))
+  e := NewEditor("test.md", blocks)
+  ```
+  Follow this pattern — do not invent a helper function.
 - **No new files needed** in `internal/vim/` — `InsertHandler` is unchanged.
 
 [Source: 5-1-undo-and-redo.md#Dev Notes] — Undo recording, two-stage Esc, mutation hook patterns
