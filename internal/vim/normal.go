@@ -75,6 +75,12 @@ func (n *NormalHandler) handleSingleKey(key string) Action {
 		return ChangeModeAction{Mode: Command}
 	case "ctrl+c":
 		return QuitAction{}
+	case "u":
+		return UndoAction{}
+	case "ctrl+r":
+		return RedoAction{}
+	case "esc":
+		return ChangeModeAction{Mode: Normal}
 	default:
 		return NoOpAction{}
 	}

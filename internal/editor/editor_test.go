@@ -700,7 +700,9 @@ func TestEditorModel_InsertMode_EnterAndExit(t *testing.T) {
 		t.Fatal("expected activeBuffer != nil in insert mode")
 	}
 
-	// Press Esc to exit
+	// Press Esc to exit: first Esc enters pending-commit, second Esc commits
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	if e.CurrentMode() != vim.Normal {
@@ -727,7 +729,9 @@ func TestEditorModel_InsertMode_TypeText_UpdatesBlock(t *testing.T) {
 		e.Update(tea.KeyPressMsg{Code: ch})
 	}
 
-	// Exit insert mode
+	// Exit insert mode (second Esc commits the pending block)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	// Block content should be updated — 'i' places cursor at start
@@ -747,7 +751,9 @@ func TestEditorModel_InsertMode_TypeSpace(t *testing.T) {
 	// Type space using the "space" key representation
 	e.Update(tea.KeyPressMsg{Code: ' '})
 
-	// Exit
+	// Exit (second Esc commits)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	if e.blocks[0].Raw != " Hello" {
@@ -767,7 +773,9 @@ func TestEditorModel_InsertMode_Backspace(t *testing.T) {
 	e.Update(tea.KeyPressMsg{Code: 'X'})
 	e.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 
-	// Exit
+	// Exit (second Esc commits)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	// Block should be unchanged since we typed then deleted
@@ -789,7 +797,9 @@ func TestEditorModel_InsertMode_NewlineO(t *testing.T) {
 		e.Update(tea.KeyPressMsg{Code: ch})
 	}
 
-	// Exit
+	// Exit (second Esc commits)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	expected := "Hello\nWorld"
@@ -811,7 +821,9 @@ func TestEditorModel_InsertMode_NewlineO_MultiLine(t *testing.T) {
 		e.Update(tea.KeyPressMsg{Code: ch})
 	}
 
-	// Exit
+	// Exit (second Esc commits)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	expected := "Line1\nNew\nLine2\nLine3"
@@ -831,7 +843,9 @@ func TestEditorModel_InsertMode_Delete(t *testing.T) {
 	// Delete key removes character after cursor
 	e.Update(tea.KeyPressMsg{Code: tea.KeyDelete})
 
-	// Exit
+	// Exit (second Esc commits)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	expected := "ello"
@@ -853,7 +867,9 @@ func TestEditorModel_InsertMode_NewlineShiftO(t *testing.T) {
 		e.Update(tea.KeyPressMsg{Code: ch})
 	}
 
-	// Exit
+	// Exit (second Esc commits)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	expected := "World\nHello"
@@ -873,7 +889,9 @@ func TestEditorModel_InsertMode_Tab(t *testing.T) {
 	// Type tab
 	e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 
-	// Exit
+	// Exit (second Esc commits)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	expected := "\tHello"
@@ -923,7 +941,9 @@ func TestEditorModel_InsertMode_ArrowKeys(t *testing.T) {
 	e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	e.Update(tea.KeyPressMsg{Code: 'X'})
 
-	// Exit
+	// Exit (second Esc commits)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	expected := "HeXllo\nWorld"
@@ -1003,7 +1023,9 @@ func TestEditorModel_ExitInsertMode_CacheReusedWhenUnmodified_VariantO(t *testin
 
 	// Enter with 'o' variant (creates new line)
 	e.Update(tea.KeyPressMsg{Code: 'o'})
-	// Immediately exit without typing
+	// Immediately exit without typing (second Esc commits)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	// Should have newline added
@@ -1021,7 +1043,9 @@ func TestEditorModel_ExitInsertMode_CacheReusedWhenUnmodified_VariantShiftO(t *t
 
 	// Enter with 'O' variant (creates new line above)
 	e.Update(tea.KeyPressMsg{Code: 'O', Mod: tea.ModShift})
-	// Immediately exit without typing
+	// Immediately exit without typing (second Esc commits)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	// Should have newline added above
@@ -1106,7 +1130,9 @@ func TestEditorModel_ExitInsertMode_CacheInvalidatedWhenModified(t *testing.T) {
 		t.Fatal("expected buffer content to be modified")
 	}
 
-	// Exit insert mode
+	// Exit insert mode (second Esc commits)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	// Block content should be updated
@@ -1274,7 +1300,9 @@ func TestEditorModel_MultipleEnterExitCycles(t *testing.T) {
 			t.Fatalf("cycle %d: expected activeBlockIdx=0, got %d", cycle, e.activeBlockIdx)
 		}
 
-		// Exit without modification
+		// Exit without modification (second Esc commits)
+		e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+		// second Esc: commit the pending block
 		e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 		if e.CurrentMode() != vim.Normal {
@@ -1320,6 +1348,8 @@ func TestEditorModel_ReenterAfterModification(t *testing.T) {
 	}
 
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	// Verify block was updated
 	if e.blocks[0].Raw != modifiedContent {
@@ -1340,7 +1370,9 @@ func TestEditorModel_ReenterAfterModification(t *testing.T) {
 		t.Error("re-entered content shows original content instead of modified content")
 	}
 
-	// Exit again
+	// Exit again (second Esc commits)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	// Final verification: block still has modified content
@@ -1442,7 +1474,9 @@ func TestEditorModel_ResizeDuringInsertMode(t *testing.T) {
 			e.activeBuffer.Content(), modifiedContent)
 	}
 
-	// Exit insert mode
+	// Exit insert mode (second Esc commits)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	// Verify block was updated with modified content
@@ -1502,7 +1536,9 @@ func TestEditorModel_CursorMapping_ExitReturnsToRenderedPosition(t *testing.T) {
 		e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	}
 
-	// Exit
+	// Exit (second Esc commits and maps cursor to rendered position)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	// H2 1:1 mapping: raw col 3 → rendered col 3 (the 'M' in rendered "## My Title")
@@ -1528,8 +1564,10 @@ func TestEditorModel_CursorMapping_RoundTrip(t *testing.T) {
 		lineBefore := e.CursorLine()
 		colBefore := e.CursorCol()
 
-		// Enter and immediately exit (no typing)
+		// Enter and immediately exit (no typing); second Esc commits
 		e.Update(tea.KeyPressMsg{Code: 'i'})
+		e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+		// second Esc: commit the pending block
 		e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 		lineAfter := e.CursorLine()
@@ -1596,7 +1634,10 @@ func TestEditorModel_TransitionCycle_FullIntegration(t *testing.T) {
 	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	// Test scenario: enter first block, exit without editing (should use cache)
+	// Two Esc: first enters pending-commit, second commits
 	e.Update(tea.KeyPressMsg{Code: 'i'})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	// Verify we're back in normal mode at the block start
@@ -1627,6 +1668,8 @@ func TestEditorModel_TransitionCycle_FullIntegration(t *testing.T) {
 		e.Update(tea.KeyPressMsg{Code: ch})
 	}
 
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	// Verify modification was saved
@@ -2009,7 +2052,9 @@ func TestBlockSplit_TypeAfterSplit(t *testing.T) {
 		e.Update(tea.KeyPressMsg{Code: ch})
 	}
 
-	// Exit insert mode
+	// Exit insert mode (second Esc commits)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// second Esc: commit the pending block
 	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	if e.blocks[1].Raw != "Second block" {
@@ -3183,5 +3228,252 @@ func TestEditor_WriteToPath_InvalidDir_ShowsError(t *testing.T) {
 	view := m.statusBar.View(false)
 	if !strings.Contains(view, "E: ") {
 		t.Errorf("expected error message starting with 'E: ' in status bar view, got: %q", view)
+	}
+}
+
+// --- Undo/Redo Integration Tests ---
+
+func TestEditorModel_Undo_RevertsTypedContent(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode, type some text
+	e.Update(tea.KeyPressMsg{Code: 'a'})
+	for _, ch := range " World" {
+		e.Update(tea.KeyPressMsg{Code: rune(ch)})
+	}
+
+	// Esc to pending-commit, then u to undo
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if !e.blockPendingCommit {
+		t.Fatal("expected blockPendingCommit=true after first Esc")
+	}
+
+	e.Update(tea.KeyPressMsg{Code: 'u'})
+
+	// After undo, content should revert to initial state recorded at insert entry
+	if e.activeBuffer == nil {
+		t.Fatal("expected activeBuffer != nil after undo")
+	}
+	if e.activeBuffer.Content() != "Hello" {
+		t.Errorf("after undo: got content=%q, want %q", e.activeBuffer.Content(), "Hello")
+	}
+}
+
+func TestEditorModel_Redo_ReappliesUndoneContent(t *testing.T) {
+	blocks := block.Parse([]byte("Hi"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode at start, type a character
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+	e.Update(tea.KeyPressMsg{Code: 'X'})
+
+	// Esc → undo → redo via mode handler (ctrl+r can't be sent as KeyPressMsg easily)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	e.Update(tea.KeyPressMsg{Code: 'u'})
+
+	// Verify undo worked — should revert to "Hi"
+	if e.activeBuffer.Content() != "Hi" {
+		t.Fatalf("after undo: got %q, want %q", e.activeBuffer.Content(), "Hi")
+	}
+
+	// Redo via mode handler
+	action := e.modeHandler.HandleKey("ctrl+r")
+	e.applyAction(action)
+
+	if e.activeBuffer.Content() != "XHi" {
+		t.Errorf("after redo: got %q, want %q", e.activeBuffer.Content(), "XHi")
+	}
+}
+
+func TestEditorModel_Undo_EmptyStack_NoOp(t *testing.T) {
+	blocks := block.Parse([]byte("Text"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode, immediately Esc without typing
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	// Undo on pending-commit with only the initial entry
+	e.Update(tea.KeyPressMsg{Code: 'u'})
+
+	// Should not crash and content should be unchanged
+	if e.activeBuffer == nil {
+		t.Fatal("expected activeBuffer != nil in pending-commit")
+	}
+	if e.activeBuffer.Content() != "Text" {
+		t.Errorf("after undo with no edits: got %q, want %q", e.activeBuffer.Content(), "Text")
+	}
+}
+
+func TestEditorModel_Undo_NotPending_NoOp(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// In normal mode (no pending commit), u should be a no-op
+	e.Update(tea.KeyPressMsg{Code: 'u'})
+
+	// Should not crash, no buffer active
+	if e.activeBuffer != nil {
+		t.Error("expected no activeBuffer in normal mode")
+	}
+}
+
+func TestEditorModel_PendingCommit_ReenterWithI_ReusesBuffer(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter, type, Esc to pending
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+	e.Update(tea.KeyPressMsg{Code: 'X'})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	content := e.activeBuffer.Content()
+
+	// Re-enter with i
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+
+	if e.CurrentMode() != vim.Insert {
+		t.Fatalf("expected Insert mode, got %v", e.CurrentMode())
+	}
+	if e.blockPendingCommit {
+		t.Error("expected blockPendingCommit=false after re-entry")
+	}
+	if e.activeBuffer.Content() != content {
+		t.Errorf("expected buffer content preserved: got %q, want %q", e.activeBuffer.Content(), content)
+	}
+}
+
+func TestEditorModel_PendingCommit_ReenterWithA_MovesCursorRight(t *testing.T) {
+	blocks := block.Parse([]byte("AB"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter at cursor position with 'i', move to known position
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	posBefore := e.activeBuffer.CursorPos()
+
+	// Re-enter with 'a' — should move cursor right by 1
+	e.Update(tea.KeyPressMsg{Code: 'a'})
+
+	posAfter := e.activeBuffer.CursorPos()
+	if posAfter != posBefore+1 {
+		t.Errorf("expected cursor to advance by 1 with 'a' re-entry: before=%d, after=%d", posBefore, posAfter)
+	}
+}
+
+func TestEditorModel_SecondEsc_CommitsAndClearsUndo(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter, type, first Esc (pending), second Esc (commit)
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+	e.Update(tea.KeyPressMsg{Code: 'X'})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	// Block should be committed
+	if e.blockPendingCommit {
+		t.Error("expected blockPendingCommit=false after second Esc")
+	}
+	if e.activeBuffer != nil {
+		t.Error("expected activeBuffer=nil after commit")
+	}
+	// Undo stack should be cleared
+	if e.undoManager.CanUndo() {
+		t.Error("expected undo stack empty after commit")
+	}
+}
+
+func TestEditorModel_ReenterBlock_FreshUndoStack(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// First session: enter, type, commit
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+	e.Update(tea.KeyPressMsg{Code: 'X'})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	// Re-enter the same block
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+
+	// Undo stack should have exactly 1 entry (initial state)
+	// Undo should restore to current content (since initial = current)
+	if !e.undoManager.CanUndo() {
+		t.Error("expected undo stack to have initial entry after re-entering block")
+	}
+}
+
+func TestEditorModel_SplitBlock_UndoIsolation(t *testing.T) {
+	blocks := block.Parse([]byte("Hello"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode with 'o' (opens new line below, placing cursor at end + newline)
+	// Content becomes "Hello\n" with cursor on new line
+	e.Update(tea.KeyPressMsg{Code: 'o'})
+
+	// Second Enter triggers split (cursor at end, content ends with \n)
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	// Should now be in a new block (index 1)
+	if e.activeBlockIdx != 1 {
+		t.Fatalf("expected activeBlockIdx=1 after split, got %d", e.activeBlockIdx)
+	}
+
+	// Undo stack should NOT contain entries from the previous block
+	// There should be exactly 1 entry (initial state of new empty block)
+	if !e.undoManager.CanUndo() {
+		t.Fatal("expected undo stack to have initial entry for new block")
+	}
+
+	// Undo should give back empty content (the initial state of the new block)
+	curLine, curCol := e.activeBuffer.CursorLineCol()
+	entry, ok := e.undoManager.Undo(e.activeBuffer.Content(), e.activeBuffer.CursorPos(), curLine, curCol)
+	if !ok {
+		t.Fatal("expected undo to succeed")
+	}
+	if entry.Content != "" {
+		t.Errorf("undo in new block: got content=%q, want empty string", entry.Content)
+	}
+
+	// No more undo entries — previous block history should not leak
+	if e.undoManager.CanUndo() {
+		t.Error("expected no more undo entries — previous block history should not leak")
+	}
+}
+
+func TestEditorModel_NavigationCommitsPending(t *testing.T) {
+	blocks := block.Parse([]byte("Line1\n\nLine2"))
+	e := NewEditor("test.md", blocks)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Enter insert mode, type, Esc to pending
+	e.Update(tea.KeyPressMsg{Code: 'i'})
+	e.Update(tea.KeyPressMsg{Code: 'X'})
+	e.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	if !e.blockPendingCommit {
+		t.Fatal("expected pending commit")
+	}
+
+	// Navigate with j — should commit pending block first
+	e.Update(tea.KeyPressMsg{Code: 'j'})
+
+	if e.blockPendingCommit {
+		t.Error("expected pending commit cleared after navigation")
+	}
+	if e.activeBuffer != nil {
+		t.Error("expected activeBuffer=nil after navigation commit")
 	}
 }

@@ -61,6 +61,12 @@ type InsertTabAction struct{}
 // ExecuteCommandAction signals the editor to execute the accumulated command buffer.
 type ExecuteCommandAction struct{}
 
+// UndoAction signals the editor to undo the last edit in the active block.
+type UndoAction struct{}
+
+// RedoAction signals the editor to redo the last undone edit in the active block.
+type RedoAction struct{}
+
 func (NoOpAction) actionTag()             {}
 func (MoveCursorAction) actionTag()       {}
 func (ScrollAction) actionTag()           {}
@@ -74,3 +80,5 @@ func (DeleteCharAction) actionTag()       {}
 func (InsertNewlineAction) actionTag()    {}
 func (InsertTabAction) actionTag()        {}
 func (ExecuteCommandAction) actionTag()   {}
+func (UndoAction) actionTag()             {}
+func (RedoAction) actionTag()             {}

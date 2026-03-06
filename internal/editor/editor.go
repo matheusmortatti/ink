@@ -46,8 +46,10 @@ type EditorModel struct {
 	desiredCol  int
 
 	// Insert mode state
-	activeBlockIdx int              // index of block being edited, -1 when none
-	activeBuffer   *block.GapBuffer // gap buffer for active editing block
+	activeBlockIdx   int              // index of block being edited, -1 when none
+	activeBuffer     *block.GapBuffer // gap buffer for active editing block
+	undoManager      *UndoManager     // undo/redo history for the active block
+	blockPendingCommit bool           // true when block is pending commit (between Esc and navigation)
 
 	// Command mode state
 	commandBuf string // accumulated command text (without the leading ':')
@@ -81,6 +83,7 @@ func NewEditor(filePath string, blocks []block.Block) *EditorModel {
 		modeHandler:    vim.NewNormalHandler(),
 		activeBlockIdx: -1,
 		hasDark:        hasDark,
+		undoManager:    NewUndoManager(100),
 	}
 }
 
@@ -174,7 +177,7 @@ func (e *EditorModel) View() tea.View {
 	sbRows := statusBarRows(e.height)
 	var content string
 	if sbRows > 0 && e.statusBar != nil {
-		isDimmed := e.modeHandler.Mode() == vim.Insert
+		isDimmed := e.modeHandler.Mode() == vim.Insert && !e.blockPendingCommit
 		sbLine := e.statusBar.View(isDimmed)
 		if sbRows == 2 {
 			content = viewContent + "\n\n" + sbLine
@@ -211,13 +214,17 @@ func (e *EditorModel) View() tea.View {
 		v.Cursor = tea.NewCursor(cursorCol, sbRow)
 		v.Cursor.Shape = tea.CursorBar
 	} else if e.activeBlockIdx >= 0 && e.activeBuffer != nil {
-		// Insert mode: cursor is within the active block (accounts for line wrapping)
+		// Insert mode (or pending-commit normal mode): cursor is within the active block
 		bufLine, bufCol := e.activeBuffer.CursorLineCol()
 		screenRow, screenCol := e.viewport.BufferToScreenPos(bufLine, bufCol)
 		screenRow -= e.viewport.ScrollOffset()
 
 		v.Cursor = tea.NewCursor(screenCol, screenRow)
-		v.Cursor.Shape = tea.CursorBar
+		if e.blockPendingCommit {
+			v.Cursor.Shape = tea.CursorBlock // normal mode cursor shape while pending
+		} else {
+			v.Cursor.Shape = tea.CursorBar
+		}
 	} else {
 		// Normal mode: cursor is at document level
 		screenRow := e.cursorLine - e.viewport.ScrollOffset()
@@ -235,6 +242,9 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 
 	switch a := action.(type) {
 	case vim.QuitAction:
+		if e.blockPendingCommit {
+			e.commitPendingBlock()
+		}
 		// Same logic as :q — prompt for save if unsaved unnamed buffer
 		if e.filePath == "" && e.hasContent() {
 			e.activateSavePrompt(true)
@@ -246,10 +256,46 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 	case vim.ChangeModeAction:
 		switch {
 		case a.Mode == vim.Insert && e.modeHandler.Mode() == vim.Normal:
-			e.enterInsertMode(a.Variant)
+			if e.blockPendingCommit {
+				// Re-enter insert mode in the same block — reuse existing buffer
+				e.blockPendingCommit = false
+				switch a.Variant {
+				case "a":
+					e.activeBuffer.MoveRight()
+				case "o":
+					e.activeBuffer.MoveToLineEnd()
+					e.activeBuffer.Insert('\n')
+				case "O":
+					curLine, _ := e.activeBuffer.CursorLineCol()
+					e.activeBuffer.SetCursorLineCol(curLine, 0)
+					e.activeBuffer.MoveToLineStart()
+					e.activeBuffer.Insert('\n')
+					e.activeBuffer.SetCursorLineCol(curLine, 0)
+				}
+				if a.Variant == "o" || a.Variant == "O" {
+					e.updateActiveBlockDisplay()
+				}
+				e.modeHandler = vim.NewInsertHandler()
+			} else {
+				e.enterInsertMode(a.Variant)
+			}
 		case a.Mode == vim.Normal && e.modeHandler.Mode() == vim.Insert:
-			e.exitInsertMode()
+			if e.activeBlockIdx >= 0 && e.activeBuffer != nil {
+				// First Esc: switch to normal mode but keep block alive for undo/redo
+				e.blockPendingCommit = true
+				e.modeHandler = vim.NewNormalHandler()
+			} else {
+				e.exitInsertMode()
+			}
+		case a.Mode == vim.Normal && e.modeHandler.Mode() == vim.Normal:
+			// Second Esc (or esc in normal mode): commit pending block if any
+			if e.blockPendingCommit {
+				e.commitPendingBlock()
+			}
 		case a.Mode == vim.Command && e.modeHandler.Mode() == vim.Normal:
+			if e.blockPendingCommit {
+				e.commitPendingBlock()
+			}
 			e.enterCommandMode()
 		case a.Mode == vim.Normal && e.modeHandler.Mode() == vim.Command:
 			e.exitCommandMode()
@@ -258,10 +304,32 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 	case vim.ExecuteCommandAction:
 		return e.executeCommand()
 
+	case vim.UndoAction:
+		if e.activeBuffer != nil && e.blockPendingCommit {
+			curLine, curCol := e.activeBuffer.CursorLineCol()
+			if entry, ok := e.undoManager.Undo(e.activeBuffer.Content(), e.activeBuffer.CursorPos(), curLine, curCol); ok {
+				e.activeBuffer = block.NewGapBuffer(entry.Content)
+				e.activeBuffer.SetCursorPos(entry.CursorPos)
+				e.updateActiveBlockDisplay()
+			}
+		}
+
+	case vim.RedoAction:
+		if e.activeBuffer != nil && e.blockPendingCommit {
+			curLine, curCol := e.activeBuffer.CursorLineCol()
+			if entry, ok := e.undoManager.Redo(e.activeBuffer.Content(), e.activeBuffer.CursorPos(), curLine, curCol); ok {
+				e.activeBuffer = block.NewGapBuffer(entry.Content)
+				e.activeBuffer.SetCursorPos(entry.CursorPos)
+				e.updateActiveBlockDisplay()
+			}
+		}
+
 	case vim.InsertCharAction:
 		if e.modeHandler.Mode() == vim.Command {
 			e.commandBuf += string(a.Char)
 		} else if e.activeBuffer != nil {
+			curLine, curCol := e.activeBuffer.CursorLineCol()
+			e.undoManager.Record(e.activeBuffer.Content(), e.activeBuffer.CursorPos(), curLine, curCol, "insert")
 			e.activeBuffer.Insert(a.Char)
 			e.updateActiveBlockDisplay()
 			autoSaveCmd = e.startAutoSaveTimer()
@@ -274,6 +342,8 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 				e.commandBuf = string(runes[:len(runes)-1])
 			}
 		} else if e.activeBuffer != nil {
+			curLine, curCol := e.activeBuffer.CursorLineCol()
+			e.undoManager.Record(e.activeBuffer.Content(), e.activeBuffer.CursorPos(), curLine, curCol, "delete")
 			e.activeBuffer.Backspace()
 			e.updateActiveBlockDisplay()
 			autoSaveCmd = e.startAutoSaveTimer()
@@ -281,6 +351,8 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 
 	case vim.DeleteCharAction:
 		if e.activeBuffer != nil {
+			curLine, curCol := e.activeBuffer.CursorLineCol()
+			e.undoManager.Record(e.activeBuffer.Content(), e.activeBuffer.CursorPos(), curLine, curCol, "delete")
 			e.activeBuffer.Delete()
 			e.updateActiveBlockDisplay()
 			autoSaveCmd = e.startAutoSaveTimer()
@@ -296,6 +368,8 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 				e.refreshStatusBar()
 				return e, e.startAutoSaveTimer()
 			}
+			curLine, curCol := e.activeBuffer.CursorLineCol()
+			e.undoManager.Record(e.activeBuffer.Content(), e.activeBuffer.CursorPos(), curLine, curCol, "newline")
 			e.activeBuffer.Insert('\n')
 			e.updateActiveBlockDisplay()
 			autoSaveCmd = e.startAutoSaveTimer()
@@ -303,12 +377,17 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 
 	case vim.InsertTabAction:
 		if e.activeBuffer != nil {
+			curLine, curCol := e.activeBuffer.CursorLineCol()
+			e.undoManager.Record(e.activeBuffer.Content(), e.activeBuffer.CursorPos(), curLine, curCol, "insert")
 			e.activeBuffer.Insert('\t')
 			e.updateActiveBlockDisplay()
 			autoSaveCmd = e.startAutoSaveTimer()
 		}
 
 	case vim.MoveCursorAction:
+		if e.blockPendingCommit {
+			e.commitPendingBlock()
+		}
 		if e.activeBlockIdx >= 0 && e.activeBuffer != nil {
 			// In insert mode: move within the gap buffer (wrap-aware for up/down)
 			if a.Relative {
@@ -348,11 +427,17 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 		}
 
 	case vim.WordMotionAction:
+		if e.blockPendingCommit {
+			e.commitPendingBlock()
+		}
 		e.applyWordMotion(a.Forward)
 		e.desiredCol = e.cursorCol
 		e.ensureCursorVisible()
 
 	case vim.ScrollAction:
+		if e.blockPendingCommit {
+			e.commitPendingBlock()
+		}
 		halfPage := e.viewport.ViewportHeight() / 2
 		if halfPage < 1 {
 			halfPage = 1
@@ -371,6 +456,9 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 		e.ensureCursorVisible()
 
 	case vim.DocumentPositionAction:
+		if e.blockPendingCommit {
+			e.commitPendingBlock()
+		}
 		switch a.Position {
 		case "top":
 			e.cursorLine = 0
@@ -454,6 +542,9 @@ func (e *EditorModel) enterInsertMode(variant string) {
 		e.activeBuffer = nil
 		return
 	}
+	// Record initial state so the user can undo back to the original block content
+	curLine, curCol := e.activeBuffer.CursorLineCol()
+	e.undoManager.Record(e.activeBuffer.Content(), e.activeBuffer.CursorPos(), curLine, curCol, "insert")
 	e.modeHandler = vim.NewInsertHandler()
 	e.ensureInsertCursorVisible()
 }
@@ -494,6 +585,14 @@ func (e *EditorModel) exitInsertMode() {
 	e.modeHandler = vim.NewNormalHandler()
 	e.clampCursor()
 	e.ensureCursorVisible()
+}
+
+// commitPendingBlock commits the pending block: runs exitInsertMode(), clears undo history,
+// and resets the pending-commit flag. Called when navigating away from a pending block.
+func (e *EditorModel) commitPendingBlock() {
+	e.exitInsertMode()
+	e.undoManager.Clear()
+	e.blockPendingCommit = false
 }
 
 // enterCommandMode activates command mode, clearing the command buffer.
@@ -723,6 +822,9 @@ func (e *EditorModel) splitActiveBlock() {
 	_ = e.viewport.ClearActiveBlock()
 	_ = e.viewport.SetContent(e.blocks, e.renderer, e.cache)
 
+	// Clear undo history from previous block before entering the new one
+	e.undoManager.Clear()
+
 	// Enter insert mode on the new block
 	e.activeBlockIdx = idx
 	e.activeBuffer = block.NewGapBuffer("")
@@ -731,6 +833,8 @@ func (e *EditorModel) splitActiveBlock() {
 		e.activeBuffer = nil
 		return
 	}
+	// Record initial state so user can undo back to empty content in the new block
+	e.undoManager.Record("", 0, 0, 0, "insert")
 	e.modeHandler = vim.NewInsertHandler()
 	e.ensureInsertCursorVisible()
 }
@@ -1068,6 +1172,8 @@ func (e *EditorModel) initViewport() {
 		e.activeBlockIdx = 0
 		e.activeBuffer = block.NewGapBuffer("")
 		_ = e.viewport.SetActiveBlock(0, "")
+		// Record initial state so user can undo back to empty content
+		e.undoManager.Record("", 0, 0, 0, "insert")
 		e.modeHandler = vim.NewInsertHandler()
 		e.ensureInsertCursorVisible()
 	}

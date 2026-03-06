@@ -76,8 +76,8 @@ development_status:
   epic-4-retrospective: optional
 
   # Epic 5: Advanced Editing Capabilities
-  epic-5: backlog
-  5-1-undo-and-redo: backlog
+  epic-5: in-progress
+  5-1-undo-and-redo: done
   5-2-auto-pairs-for-markdown: backlog
   5-3-clipboard-integration: backlog
   5-4-visual-mode-selection: backlog

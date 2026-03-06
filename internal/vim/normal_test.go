@@ -273,6 +273,22 @@ func TestNormalHandler_InsertModeTriggers(t *testing.T) {
 	}
 }
 
+func TestNormalHandler_UndoKey_ReturnsUndoAction(t *testing.T) {
+	h := NewNormalHandler()
+	action := h.HandleKey("u")
+	if _, ok := action.(UndoAction); !ok {
+		t.Fatalf("expected UndoAction for 'u', got %T", action)
+	}
+}
+
+func TestNormalHandler_RedoKey_ReturnsRedoAction(t *testing.T) {
+	h := NewNormalHandler()
+	action := h.HandleKey("ctrl+r")
+	if _, ok := action.(RedoAction); !ok {
+		t.Fatalf("expected RedoAction for 'ctrl+r', got %T", action)
+	}
+}
+
 func TestNormalHandler_PendingStateClearedAfterNonG(t *testing.T) {
 	h := NewNormalHandler()
 
