@@ -38,6 +38,37 @@ func main() {
 	}
 
 	e := editor.NewEditor(filePath, blocks)
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		// TUI is already stopped (panic unwinds bubbletea's cleanup)
+		fmt.Fprintf(os.Stderr, "panic: %v\n", r)
+
+		// Nested recover: e.Serialize() could panic if the editor state
+		// is corrupted (e.g., gap buffer out of bounds). Best effort — no
+		// secondary panic per architecture spec.
+		var content []byte
+		func() {
+			defer func() { recover() }()
+			content = e.Serialize()
+		}()
+		if content == nil {
+			fmt.Fprintf(os.Stderr, "emergency save failed: could not serialize document\n")
+			os.Exit(2)
+		}
+
+		path, err := file.EmergencySave(content)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "emergency save failed: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "recovery file: %s\n", path)
+		}
+		os.Exit(2)
+	}()
+
 	p := tea.NewProgram(e)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

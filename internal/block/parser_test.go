@@ -636,3 +636,29 @@ func blockTypes(blocks []Block) []string {
 	}
 	return types
 }
+
+// TestParser_InvalidInput_NoPanic documents NFR11: goldmark handles any byte
+// sequence gracefully without panicking. The test itself proves resilience —
+// if Parse() panics, the test runner catches it as a failure.
+func TestParser_InvalidInput_NoPanic(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []byte
+	}{
+		{"empty bytes", []byte{}},
+		{"random binary garbage", []byte{0x00, 0xff, 0xfe, 0x80, 0x01, 0x7f}},
+		{"malformed utf-8", []byte{0xc3, 0x28, 0xe2, 0x82, 0xac, 0xf0, 0x28}},
+		{"deeply nested bold", []byte("**" + strings.Repeat("**bold**", 50) + "**")},
+		{"unclosed code fence", []byte("```go\nfunc main() {}\n")},
+		{"unclosed bold", []byte("**unclosed bold")},
+		{"null bytes in text", []byte("hello\x00world")},
+		{"only newlines", []byte("\n\n\n\n\n")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// No assertion needed: if Parse panics the test runner reports it.
+			_ = Parse(tt.input)
+		})
+	}
+}

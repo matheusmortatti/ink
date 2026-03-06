@@ -99,6 +99,13 @@ func (e *EditorModel) CurrentMode() vim.Mode {
 	return e.modeHandler.Mode()
 }
 
+// Serialize returns the current document content as bytes.
+// Safe to call from a defer recover() in main — uses the same pointer that
+// Bubbletea mutates throughout the session.
+func (e *EditorModel) Serialize() []byte {
+	return e.serializeDocument()
+}
+
 func (e *EditorModel) Init() tea.Cmd {
 	return nil
 }
