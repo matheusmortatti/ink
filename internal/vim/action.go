@@ -67,6 +67,22 @@ type UndoAction struct{}
 // RedoAction signals the editor to redo the last undone edit in the active block.
 type RedoAction struct{}
 
+// InsertPairAction inserts an opening+closing pair at the cursor, leaving the cursor between them.
+type InsertPairAction struct {
+	Opening string
+	Closing string
+}
+
+// SkipClosingAction moves the cursor right past an existing closing character rather than inserting a duplicate.
+type SkipClosingAction struct {
+	Count int // number of runes to skip (1 for single-char pairs, 2 for ** and __)
+}
+
+// MultiAction groups multiple actions to be applied in sequence.
+type MultiAction struct {
+	Actions []Action
+}
+
 func (NoOpAction) actionTag()             {}
 func (MoveCursorAction) actionTag()       {}
 func (ScrollAction) actionTag()           {}
@@ -82,3 +98,6 @@ func (InsertTabAction) actionTag()        {}
 func (ExecuteCommandAction) actionTag()   {}
 func (UndoAction) actionTag()             {}
 func (RedoAction) actionTag()             {}
+func (InsertPairAction) actionTag()       {}
+func (SkipClosingAction) actionTag()      {}
+func (MultiAction) actionTag()            {}

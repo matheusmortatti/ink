@@ -142,6 +142,22 @@ func (e *EditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if e.savePromptActive {
 			return e.handleSavePromptKey(msg)
 		}
+		// Provide next-char context to InsertHandler for skip-over detection.
+		if e.modeHandler.Mode() == vim.Insert && e.activeBuffer != nil {
+			if ih, ok := e.modeHandler.(*vim.InsertHandler); ok {
+				content := e.activeBuffer.Content()
+				pos := e.activeBuffer.CursorPos()
+				runes := []rune(content)
+				var nextChar, nextNextChar rune
+				if pos < len(runes) {
+					nextChar = runes[pos]
+				}
+				if pos+1 < len(runes) {
+					nextNextChar = runes[pos+1]
+				}
+				ih.SetNextChars(nextChar, nextNextChar)
+			}
+		}
 		action := e.modeHandler.HandleKey(msg.String())
 		return e.applyAction(action)
 
@@ -470,6 +486,50 @@ func (e *EditorModel) applyAction(action vim.Action) (tea.Model, tea.Cmd) {
 			e.desiredCol = 0
 		}
 		e.ensureCursorVisible()
+
+	case vim.InsertPairAction:
+		if e.activeBuffer != nil {
+			curLine, curCol := e.activeBuffer.CursorLineCol()
+			e.undoManager.Record(e.activeBuffer.Content(), e.activeBuffer.CursorPos(), curLine, curCol, "insert")
+			for _, r := range a.Opening {
+				e.activeBuffer.Insert(r)
+			}
+			for _, r := range a.Closing {
+				e.activeBuffer.Insert(r)
+			}
+			for range a.Closing {
+				e.activeBuffer.MoveLeft()
+			}
+			e.updateActiveBlockDisplay()
+			autoSaveCmd = e.startAutoSaveTimer()
+		}
+
+	case vim.SkipClosingAction:
+		if e.activeBuffer != nil {
+			content := e.activeBuffer.Content()
+			pos := e.activeBuffer.CursorPos()
+			runes := []rune(content)
+			if pos+a.Count <= len(runes) {
+				for i := 0; i < a.Count; i++ {
+					e.activeBuffer.MoveRight()
+				}
+				e.updateActiveBlockDisplay()
+				// No undo record — cursor movement only, no content change.
+				// No auto-save — no content change.
+			}
+			// If bounds check fails, no-op (chars unexpectedly missing).
+		}
+
+	case vim.MultiAction:
+		var cmds []tea.Cmd
+		for _, sub := range a.Actions {
+			model, cmd := e.applyAction(sub)
+			e = model.(*EditorModel)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+		return e, tea.Batch(cmds...)
 
 	case vim.NoOpAction:
 		// Nothing to do

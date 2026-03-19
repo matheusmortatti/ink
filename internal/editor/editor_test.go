@@ -3477,3 +3477,206 @@ func TestEditorModel_NavigationCommitsPending(t *testing.T) {
 		t.Error("expected activeBuffer=nil after navigation commit")
 	}
 }
+
+// --- Auto-pair integration tests ---
+
+func TestEditor_AutoPair_Backtick_InsertsAndPositionsCursor(t *testing.T) {
+	e := NewEditor("test.md", nil)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	// blank canvas starts in insert mode automatically
+
+	e.Update(tea.KeyPressMsg{Code: '`'})
+
+	if e.activeBuffer == nil {
+		t.Fatal("expected activeBuffer to be set")
+	}
+	content := e.activeBuffer.Content()
+	if content != "``" {
+		t.Errorf("expected buffer content=%q, got %q", "``", content)
+	}
+	// Cursor should be between the two backticks (position 1).
+	pos := e.activeBuffer.CursorPos()
+	if pos != 1 {
+		t.Errorf("expected cursor position=1 (between pair), got %d", pos)
+	}
+}
+
+func TestEditor_AutoPair_DoubleStar_InsertsAndPositionsCursor(t *testing.T) {
+	e := NewEditor("test.md", nil)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	e.Update(tea.KeyPressMsg{Code: '*'})
+	e.Update(tea.KeyPressMsg{Code: '*'})
+
+	if e.activeBuffer == nil {
+		t.Fatal("expected activeBuffer to be set")
+	}
+	content := e.activeBuffer.Content()
+	if content != "****" {
+		t.Errorf("expected buffer content=%q, got %q", "****", content)
+	}
+	// Cursor should be at position 2 (between opening ** and closing **).
+	pos := e.activeBuffer.CursorPos()
+	if pos != 2 {
+		t.Errorf("expected cursor position=2 (between pairs), got %d", pos)
+	}
+}
+
+func TestEditor_AutoPair_SkipClosing(t *testing.T) {
+	e := NewEditor("test.md", nil)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Type backtick — inserts `` with cursor between.
+	e.Update(tea.KeyPressMsg{Code: '`'})
+
+	content := e.activeBuffer.Content()
+	if content != "``" {
+		t.Fatalf("setup failed: expected %q, got %q", "``", content)
+	}
+	pos := e.activeBuffer.CursorPos()
+	if pos != 1 {
+		t.Fatalf("setup failed: expected cursor=1, got %d", pos)
+	}
+
+	// Type backtick again — next char is ` so should skip over.
+	e.Update(tea.KeyPressMsg{Code: '`'})
+
+	// Buffer should still be `` (no duplicate inserted).
+	content2 := e.activeBuffer.Content()
+	if content2 != "``" {
+		t.Errorf("expected buffer unchanged at %q after skip-over, got %q", "``", content2)
+	}
+	// Cursor should now be at position 2 (past the closing backtick).
+	pos2 := e.activeBuffer.CursorPos()
+	if pos2 != 2 {
+		t.Errorf("expected cursor position=2 after skip-over, got %d", pos2)
+	}
+}
+
+func TestEditor_AutoPair_SingleStar_NoAutoPair(t *testing.T) {
+	e := NewEditor("test.md", nil)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Type '*' then 'a' — should flush * and insert a, resulting in "*a".
+	e.Update(tea.KeyPressMsg{Code: '*'})
+	e.Update(tea.KeyPressMsg{Code: 'a'})
+
+	if e.activeBuffer == nil {
+		t.Fatal("expected activeBuffer to be set")
+	}
+	content := e.activeBuffer.Content()
+	if content != "*a" {
+		t.Errorf("expected buffer=%q (no auto-pair for single *), got %q", "*a", content)
+	}
+}
+
+func TestEditor_AutoPair_DoubleUnderscore_InsertsAndPositionsCursor(t *testing.T) {
+	e := NewEditor("test.md", nil)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	e.Update(tea.KeyPressMsg{Code: '_'})
+	e.Update(tea.KeyPressMsg{Code: '_'})
+
+	if e.activeBuffer == nil {
+		t.Fatal("expected activeBuffer to be set")
+	}
+	content := e.activeBuffer.Content()
+	if content != "____" {
+		t.Errorf("expected buffer content=%q, got %q", "____", content)
+	}
+	pos := e.activeBuffer.CursorPos()
+	if pos != 2 {
+		t.Errorf("expected cursor position=2 (between pairs), got %d", pos)
+	}
+}
+
+func TestEditor_AutoPair_OpenBracket_InsertsAndPositionsCursor(t *testing.T) {
+	e := NewEditor("test.md", nil)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	e.Update(tea.KeyPressMsg{Code: '['})
+
+	if e.activeBuffer == nil {
+		t.Fatal("expected activeBuffer to be set")
+	}
+	content := e.activeBuffer.Content()
+	if content != "[]" {
+		t.Errorf("expected buffer content=%q, got %q", "[]", content)
+	}
+	pos := e.activeBuffer.CursorPos()
+	if pos != 1 {
+		t.Errorf("expected cursor position=1 (between pair), got %d", pos)
+	}
+}
+
+func TestEditor_AutoPair_OpenParen_InsertsAndPositionsCursor(t *testing.T) {
+	e := NewEditor("test.md", nil)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	e.Update(tea.KeyPressMsg{Code: '('})
+
+	if e.activeBuffer == nil {
+		t.Fatal("expected activeBuffer to be set")
+	}
+	content := e.activeBuffer.Content()
+	if content != "()" {
+		t.Errorf("expected buffer content=%q, got %q", "()", content)
+	}
+	pos := e.activeBuffer.CursorPos()
+	if pos != 1 {
+		t.Errorf("expected cursor position=1 (between pair), got %d", pos)
+	}
+}
+
+func TestEditor_AutoPair_SkipClosing_DoubleStar(t *testing.T) {
+	e := NewEditor("test.md", nil)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Type ** — inserts **** with cursor between.
+	e.Update(tea.KeyPressMsg{Code: '*'})
+	e.Update(tea.KeyPressMsg{Code: '*'})
+
+	if e.activeBuffer == nil {
+		t.Fatal("expected activeBuffer to be set")
+	}
+	if e.activeBuffer.Content() != "****" || e.activeBuffer.CursorPos() != 2 {
+		t.Fatalf("setup failed: content=%q pos=%d", e.activeBuffer.Content(), e.activeBuffer.CursorPos())
+	}
+
+	// Type ** again — next two chars are **, should skip over.
+	e.Update(tea.KeyPressMsg{Code: '*'})
+	e.Update(tea.KeyPressMsg{Code: '*'})
+
+	content := e.activeBuffer.Content()
+	if content != "****" {
+		t.Errorf("expected buffer unchanged at %q after ** skip-over, got %q", "****", content)
+	}
+	pos := e.activeBuffer.CursorPos()
+	if pos != 4 {
+		t.Errorf("expected cursor position=4 after ** skip-over, got %d", pos)
+	}
+}
+
+func TestEditor_AutoPair_ArrowKey_FlushesPendingStar(t *testing.T) {
+	e := NewEditor("test.md", nil)
+	e.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Type '*' — pending, no visible change yet.
+	e.Update(tea.KeyPressMsg{Code: '*'})
+
+	if e.activeBuffer == nil {
+		t.Fatal("expected activeBuffer to be set")
+	}
+	// After first *, buffer should be empty (pending, not inserted).
+	if e.activeBuffer.Content() != "" {
+		t.Fatalf("expected empty buffer after first *, got %q", e.activeBuffer.Content())
+	}
+
+	// Press right arrow — should flush the pending * first.
+	e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+
+	content := e.activeBuffer.Content()
+	if content != "*" {
+		t.Errorf("expected buffer=%q after arrow flush, got %q", "*", content)
+	}
+}
