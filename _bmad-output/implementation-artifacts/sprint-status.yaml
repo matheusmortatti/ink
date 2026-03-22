@@ -79,7 +79,7 @@ development_status:
   epic-5: in-progress
   5-1-undo-and-redo: done
   5-2-auto-pairs-for-markdown: done
-  5-3-clipboard-integration: backlog
+  5-3-clipboard-integration: ready-for-dev
   5-4-visual-mode-selection: backlog
   epic-5-retrospective: optional
 
